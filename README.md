@@ -50,8 +50,7 @@ Create `~/.config/telegram-codex-bridge/config.json`:
   "approvalPolicy": "never",
   "stateFile": "~/.local/state/telegram-codex-bridge/state.json",
   "recentSessionLimit": 10,
-  "pollTimeoutSeconds": 25,
-  "revealNewSessionsInCodexApp": false
+  "pollTimeoutSeconds": 25
 }
 ```
 
@@ -80,7 +79,6 @@ Environment variables override the config file:
 - `CODEX_APPROVAL_POLICY`
 - `TELEGRAM_POLL_TIMEOUT`
 - `BRIDGE_SESSION_LIMIT`
-- `BRIDGE_REVEAL_CODEX_APP`
 
 ## Run
 
@@ -120,9 +118,7 @@ npm run send -- --dry-run --chat-id 123456789 "Automation finished"
 
 Codex CLI sessions created through `codex exec` may not appear in the Codex desktop app session list immediately because their rollout metadata is marked as `source=exec`. This bridge can rewrite the new session's rollout metadata and app state database row to match desktop-visible session metadata.
 
-That behavior is enabled by the bridge code when a new session is created. Keep `revealNewSessionsInCodexApp` set to `false` if you want the session list to update without switching the currently open Codex app tab.
-
-Set `revealNewSessionsInCodexApp` to `true` only if you explicitly want the bridge to open `codex://threads/<id>` after starting a session.
+That behavior is enabled by the bridge code when a new session is created. The bridge does not open `codex://threads/<id>`, so it can update the session list without switching the currently open Codex app tab.
 
 ## Security Notes
 
@@ -197,8 +193,7 @@ npm test
   "approvalPolicy": "never",
   "stateFile": "~/.local/state/telegram-codex-bridge/state.json",
   "recentSessionLimit": 10,
-  "pollTimeoutSeconds": 25,
-  "revealNewSessionsInCodexApp": false
+  "pollTimeoutSeconds": 25
 }
 ```
 
@@ -227,7 +222,6 @@ chmod 600 ~/.config/telegram-codex-bridge/telegram-bot-token
 - `CODEX_APPROVAL_POLICY`
 - `TELEGRAM_POLL_TIMEOUT`
 - `BRIDGE_SESSION_LIMIT`
-- `BRIDGE_REVEAL_CODEX_APP`
 
 ## 실행
 
@@ -267,9 +261,7 @@ npm run send -- --dry-run --chat-id 123456789 "자동화 완료"
 
 `codex exec`로 만들어진 Codex CLI 세션은 rollout metadata가 `source=exec`로 기록되어 Codex desktop 앱 세션 리스트에 바로 보이지 않을 수 있습니다. 이 bridge는 새 세션 생성 시 rollout metadata와 app state DB row를 desktop 앱에서 보이는 세션 형태로 보정합니다.
 
-현재 열려 있는 Codex 앱 탭을 건드리지 않고 세션 리스트만 갱신하려면 `revealNewSessionsInCodexApp`를 `false`로 유지하세요.
-
-`revealNewSessionsInCodexApp`를 `true`로 설정하면 세션 생성 후 `codex://threads/<id>`를 열어 Codex 앱이 해당 세션으로 전환될 수 있습니다.
+이 동작은 새 세션 생성 시 bridge 코드가 자동으로 수행합니다. bridge는 `codex://threads/<id>`를 열지 않으므로 현재 열려 있는 Codex 앱 탭을 바꾸지 않고 세션 리스트만 갱신할 수 있습니다.
 
 ## 보안 메모
 

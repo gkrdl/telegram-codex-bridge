@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { loadConfig, assertConfig } from './config.js';
-import { revealCodexThread } from './codexApp.js';
 import { CodexRunner } from './codexRunner.js';
 import { findSession, readRecentSessions, upsertSessionIndex } from './codexSessions.js';
 import { markThreadInteractive } from './codexStateDb.js';
@@ -107,7 +106,6 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
     }
     case 'new': {
       let indexedSessionId = '';
-      let revealedSessionId = '';
       const title = titleFromPrompt(decision.prompt);
       const result = await runCodexWithProgress({
         telegram,
@@ -129,10 +127,6 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
           void markThreadInteractive(config.codexHome, sessionId).catch((error) => {
             console.error(`[session metadata ${chatId}] ${error.stack || error.message}`);
           });
-          if (config.revealNewSessionsInCodexApp) {
-            revealedSessionId = sessionId;
-            revealCodexThread(sessionId);
-          }
         },
         run: (onProgress) => codex.runNew(decision.prompt, { onProgress }),
       });
@@ -144,9 +138,6 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
           updatedAt: new Date().toISOString(),
         });
         await markThreadInteractive(config.codexHome, sessionId);
-        if (config.revealNewSessionsInCodexApp && revealedSessionId !== sessionId) {
-          revealCodexThread(sessionId);
-        }
       }
       const session = sessionId
         ? await findSession(config.codexHome, sessionId)
