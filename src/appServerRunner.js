@@ -127,11 +127,20 @@ export class AppServerRunner {
       if (sessionId && onProgress) {
         onProgress({ type: 'thread.started', thread_id: sessionId });
       }
-      await client.request('turn/start', {
+      const turnResponse = await client.request('turn/start', {
         threadId: sessionId,
         input: [{ type: 'text', text: String(prompt ?? ''), text_elements: [] }],
       });
-      await client.waitFor(() => completed);
+      const turnText = extractTurnText(turnResponse?.turn);
+      if (turnText) {
+        finalMessage = turnText;
+      }
+      if (isTerminalTurnStatus(turnResponse?.turn?.status)) {
+        completed = true;
+      }
+      if (!completed) {
+        await client.waitFor(() => completed);
+      }
       return { finalMessage, stdout: '', stderr: '', sessionId };
     } finally {
       client.close();
@@ -159,16 +168,33 @@ export class AppServerRunner {
   }
 
   #createClient() {
-    return AppServerJsonRpcClient.create({
-      connectAppServer: this.connectAppServer,
-      endpoint: this.#ensureEndpoint(),
-    });
+    return this.#createClientWithRetry();
+  }
+
+  async #createClientWithRetry() {
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await AppServerJsonRpcClient.create({
+          connectAppServer: this.connectAppServer,
+          endpoint: this.#ensureEndpoint(),
+        });
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableConnectionError(error)) {
+          break;
+        }
+        this.#resetEndpoint();
+      }
+    }
+    throw lastError;
   }
 
   async #ensureEndpoint() {
-    if (this.endpoint) {
+    if (this.endpoint && this.#endpointStillExists(this.endpoint)) {
       return this.endpoint;
     }
+    this.#resetEndpoint();
     if (this.platform === 'win32') {
       this.endpoint = await this.#startWebSocketServer();
       return this.endpoint;
@@ -245,6 +271,16 @@ export class AppServerRunner {
     });
     this.serverChild = child;
     return child;
+  }
+
+  #endpointStillExists(endpoint) {
+    return endpoint.kind !== 'unix' || this.existsSync(endpoint.socketPath);
+  }
+
+  #resetEndpoint() {
+    this.endpoint = null;
+    this.serverChild?.kill?.();
+    this.serverChild = null;
   }
 }
 
@@ -526,6 +562,12 @@ function encodeFrame({ opcode, payload }) {
   return frame;
 }
 
+function isRetryableConnectionError(error) {
+  return error?.code === 'ENOENT'
+    || error?.code === 'ECONNREFUSED'
+    || /\b(?:ENOENT|ECONNREFUSED)\b/.test(error?.message || '');
+}
+
 function notificationToProgressEvent(message) {
   const params = message.params || {};
   if (message.method === 'thread/started') {
@@ -564,4 +606,15 @@ function extractCompletedText(event) {
     return event.item.text || '';
   }
   return '';
+}
+
+function extractTurnText(turn) {
+  const agentMessages = (turn?.items || [])
+    .map(normalizeItem)
+    .filter((item) => item?.type === 'agent_message' && item.text);
+  return agentMessages.at(-1)?.text || '';
+}
+
+function isTerminalTurnStatus(status) {
+  return status === 'completed' || status === 'failed' || status === 'interrupted';
 }

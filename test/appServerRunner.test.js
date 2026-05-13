@@ -117,6 +117,32 @@ test('resumes an app-server thread before starting a turn', async () => {
   assert.deepEqual(connectAppServer.requests.map((request) => request.method), ['initialize', 'thread/resume', 'turn/start']);
 });
 
+test('treats a completed turn/start response as completion even without a notification', async () => {
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
+    if (request.method === 'initialize') {
+      respond(connection, request.id, {});
+    }
+    if (request.method === 'thread/start') {
+      respond(connection, request.id, { thread: { id: 'thread-1' } });
+    }
+    if (request.method === 'turn/start') {
+      respond(connection, request.id, {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [{ type: 'agentMessage', id: 'item-1', text: 'response text' }],
+        },
+      });
+    }
+  });
+  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true });
+
+  const result = await runner.runNew('hello');
+
+  assert.equal(result.finalMessage, 'response text');
+  assert.equal(result.sessionId, 'thread-1');
+});
+
 test('starts a Unix socket app-server on macOS/Linux before connecting', async () => {
   const spawned = [];
   let socketExists = false;
@@ -151,6 +177,49 @@ test('starts a Unix socket app-server on macOS/Linux before connecting', async (
     probeTimeoutMs: 50,
   });
 
+  assert.equal(await runner.probe(), true);
+  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'unix://'] }]);
+});
+
+test('restarts Unix app-server when a cached socket endpoint disappeared', async () => {
+  const spawned = [];
+  let socketExists = true;
+  const spawn = (command, args) => {
+    spawned.push({ command, args });
+    socketExists = true;
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => child.emit('close', 0);
+    return child;
+  };
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
+    if (request.method === 'initialize') {
+      respond(connection, request.id, {});
+    }
+    if (request.method === 'thread/loaded/list') {
+      respond(connection, request.id, { data: [], nextCursor: null });
+    }
+  }, () => {
+    if (!socketExists) {
+      const error = new Error('connect ENOENT /tmp/codex-home/app-server-control/app-server-control.sock');
+      error.code = 'ENOENT';
+      throw error;
+    }
+  });
+  const runner = new AppServerRunner({
+    connectAppServer,
+    codexCommand: 'codex',
+    codexHome: '/tmp/codex-home',
+    existsSync: () => socketExists,
+    platform: 'darwin',
+    spawn,
+    startTimeoutMs: 50,
+    probeTimeoutMs: 50,
+  });
+
+  assert.equal(await runner.probe(), true);
+  socketExists = false;
   assert.equal(await runner.probe(), true);
   assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'unix://'] }]);
 });
