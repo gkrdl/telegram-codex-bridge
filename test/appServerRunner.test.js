@@ -4,88 +4,78 @@ import { EventEmitter } from 'node:events';
 
 import { AppServerRunner } from '../src/appServerRunner.js';
 
-function fakeAppServerSpawn(script, assertCommand = () => {}) {
+function fakeAppServerConnection(script, assertEndpoint = () => {}) {
   const requests = [];
-  const spawn = (command, args, options) => {
-    assertCommand(command, args, options);
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.stdin = {
-      write(value) {
-        for (const line of String(value).split(/\r?\n/).filter(Boolean)) {
-          const request = JSON.parse(line);
-          requests.push(request);
-          script({ request, child, requests });
-        }
-      },
-      end() {
-        child.stdinEnded = true;
-      },
+  const connectAppServer = async (endpoint) => {
+    assertEndpoint(endpoint);
+    const connection = new EventEmitter();
+    connection.send = (value) => {
+      const request = JSON.parse(value);
+      requests.push(request);
+      script({ request, connection, requests });
     };
-    child.kill = () => {
-      child.killed = true;
-      child.emit('close', 0);
+    connection.close = () => {
+      connection.closed = true;
     };
-    return child;
+    return connection;
   };
-  spawn.requests = requests;
-  return spawn;
+  connectAppServer.requests = requests;
+  return connectAppServer;
 }
 
-function respond(child, id, result) {
-  child.stdout.emit('data', Buffer.from(`${JSON.stringify({ id, result })}\n`));
+function respond(connection, id, result) {
+  connection.emit('message', JSON.stringify({ id, result }));
 }
 
-function notify(child, method, params) {
-  child.stdout.emit('data', Buffer.from(`${JSON.stringify({ method, params })}\n`));
+function notify(connection, method, params) {
+  connection.emit('message', JSON.stringify({ method, params }));
 }
 
-test('probe succeeds when app-server proxy responds to thread/loaded/list', async () => {
-  const spawn = fakeAppServerSpawn(({ request, child }) => {
+test('probe succeeds when app-server websocket responds to thread/loaded/list', async () => {
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
     if (request.method === 'initialize') {
-      respond(child, request.id, {});
+      respond(connection, request.id, {});
     }
     if (request.method === 'thread/loaded/list') {
-      respond(child, request.id, { data: [], nextCursor: null });
+      respond(connection, request.id, { data: [], nextCursor: null });
     }
   });
-  const runner = new AppServerRunner({ spawn, codexCommand: 'codex', probeTimeoutMs: 50 });
+  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, probeTimeoutMs: 50 });
 
   assert.equal(await runner.probe(), true);
-  assert.deepEqual(spawn.requests.map((request) => request.method), ['initialize', 'thread/loaded/list']);
+  assert.deepEqual(connectAppServer.requests.map((request) => request.method), ['initialize', 'thread/loaded/list']);
 });
 
-test('probe returns false when app-server proxy exits before responding', async () => {
-  const spawn = fakeAppServerSpawn(({ child }) => {
-    child.emit('close', 1);
+test('probe returns false when app-server websocket closes before responding', async () => {
+  const connectAppServer = fakeAppServerConnection(({ connection }) => {
+    connection.emit('close');
   });
-  const runner = new AppServerRunner({ spawn, codexCommand: 'codex', probeTimeoutMs: 50 });
+  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, probeTimeoutMs: 50 });
 
   assert.equal(await runner.probe(), false);
 });
 
 test('starts a new app-server thread and captures the final assistant message', async () => {
   const events = [];
-  const spawn = fakeAppServerSpawn(({ request, child }) => {
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
     if (request.method === 'initialize') {
-      respond(child, request.id, {});
+      respond(connection, request.id, {});
     }
     if (request.method === 'thread/start') {
-      respond(child, request.id, { thread: { id: 'thread-1' } });
+      respond(connection, request.id, { thread: { id: 'thread-1' } });
     }
     if (request.method === 'turn/start') {
       assert.equal(request.params.threadId, 'thread-1');
       assert.deepEqual(request.params.input, [{ type: 'text', text: 'hello', text_elements: [] }]);
-      respond(child, request.id, { turn: { id: 'turn-1', items: [], status: 'completed' } });
-      notify(child, 'turn/started', { threadId: 'thread-1' });
-      notify(child, 'item/agentMessage/delta', { threadId: 'thread-1', delta: 'done' });
-      notify(child, 'turn/completed', { threadId: 'thread-1' });
+      respond(connection, request.id, { turn: { id: 'turn-1', items: [], status: 'completed' } });
+      notify(connection, 'turn/started', { threadId: 'thread-1' });
+      notify(connection, 'item/agentMessage/delta', { threadId: 'thread-1', delta: 'done' });
+      notify(connection, 'turn/completed', { threadId: 'thread-1' });
     }
   });
   const runner = new AppServerRunner({
-    spawn,
-    codexCommand: 'codex',
+    connectAppServer,
+    existsSync: () => true,
     codexHome: '/home/user/.codex',
     defaultCwd: '/workspace',
     model: 'gpt-5.5',
@@ -96,33 +86,108 @@ test('starts a new app-server thread and captures the final assistant message', 
   assert.equal(result.sessionId, 'thread-1');
   assert.equal(result.finalMessage, 'done');
   assert.deepEqual(events, ['thread.started', 'turn.started', 'agent_message.delta', 'turn.completed']);
-  assert.equal(spawn.requests.find((request) => request.method === 'thread/start').params.cwd, '/workspace');
-  assert.equal(spawn.requests.find((request) => request.method === 'thread/start').params.model, 'gpt-5.5');
+  assert.equal(connectAppServer.requests.find((request) => request.method === 'thread/start').params.cwd, '/workspace');
+  assert.equal(connectAppServer.requests.find((request) => request.method === 'thread/start').params.model, 'gpt-5.5');
 });
 
 test('resumes an app-server thread before starting a turn', async () => {
-  const spawn = fakeAppServerSpawn(({ request, child }) => {
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
     if (request.method === 'initialize') {
-      respond(child, request.id, {});
+      respond(connection, request.id, {});
     }
     if (request.method === 'thread/resume') {
       assert.equal(request.params.threadId, 'thread-1');
-      respond(child, request.id, { thread: { id: 'thread-1' } });
+      respond(connection, request.id, { thread: { id: 'thread-1' } });
     }
     if (request.method === 'turn/start') {
-      respond(child, request.id, { turn: { id: 'turn-1', items: [], status: 'completed' } });
-      notify(child, 'item/completed', {
+      respond(connection, request.id, { turn: { id: 'turn-1', items: [], status: 'completed' } });
+      notify(connection, 'item/completed', {
         threadId: 'thread-1',
         item: { type: 'agentMessage', text: 'resumed' },
       });
-      notify(child, 'turn/completed', { threadId: 'thread-1' });
+      notify(connection, 'turn/completed', { threadId: 'thread-1' });
     }
   });
-  const runner = new AppServerRunner({ spawn, codexCommand: 'codex', defaultCwd: '/workspace' });
+  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, defaultCwd: '/workspace' });
 
   const result = await runner.resume('thread-1', 'continue');
 
   assert.equal(result.sessionId, 'thread-1');
   assert.equal(result.finalMessage, 'resumed');
-  assert.deepEqual(spawn.requests.map((request) => request.method), ['initialize', 'thread/resume', 'turn/start']);
+  assert.deepEqual(connectAppServer.requests.map((request) => request.method), ['initialize', 'thread/resume', 'turn/start']);
+});
+
+test('starts a Unix socket app-server on macOS/Linux before connecting', async () => {
+  const spawned = [];
+  let socketExists = false;
+  const spawn = (command, args) => {
+    spawned.push({ command, args });
+    socketExists = true;
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => child.emit('close', 0);
+    return child;
+  };
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
+    if (request.method === 'initialize') {
+      respond(connection, request.id, {});
+    }
+    if (request.method === 'thread/loaded/list') {
+      respond(connection, request.id, { data: [], nextCursor: null });
+    }
+  }, (endpoint) => {
+    assert.equal(endpoint.kind, 'unix');
+    assert.equal(endpoint.socketPath, '/tmp/codex-home/app-server-control/app-server-control.sock');
+  });
+  const runner = new AppServerRunner({
+    connectAppServer,
+    codexCommand: 'codex',
+    codexHome: '/tmp/codex-home',
+    existsSync: () => socketExists,
+    platform: 'darwin',
+    spawn,
+    startTimeoutMs: 50,
+    probeTimeoutMs: 50,
+  });
+
+  assert.equal(await runner.probe(), true);
+  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'unix://'] }]);
+});
+
+test('starts a localhost websocket app-server on Windows before connecting', async () => {
+  const spawned = [];
+  const spawn = (command, args) => {
+    spawned.push({ command, args });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => child.emit('close', 0);
+    queueMicrotask(() => {
+      child.stdout.emit('data', Buffer.from('listening on: ws://127.0.0.1:32123\n'));
+    });
+    return child;
+  };
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
+    if (request.method === 'initialize') {
+      respond(connection, request.id, {});
+    }
+    if (request.method === 'thread/loaded/list') {
+      respond(connection, request.id, { data: [], nextCursor: null });
+    }
+  }, (endpoint) => {
+    assert.equal(endpoint.kind, 'websocket');
+    assert.equal(endpoint.url, 'ws://127.0.0.1:32123/rpc');
+  });
+  const runner = new AppServerRunner({
+    connectAppServer,
+    codexCommand: 'codex',
+    platform: 'win32',
+    spawn,
+    startTimeoutMs: 50,
+    probeTimeoutMs: 50,
+  });
+
+  assert.equal(await runner.probe(), true);
+  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'ws://127.0.0.1:0'] }]);
 });

@@ -89,7 +89,7 @@ npm start
 
 The bridge uses Telegram long polling. Do not run two long-polling consumers with the same bot token at the same time; Telegram updates may be delivered to only one of them.
 
-At startup, the bridge probes `codex app-server proxy`. If the app-server protocol is reachable, it sends turns through that backend so connected Codex clients can receive live turn and item events. If the probe fails, it uses the normal `codex exec` backend.
+At startup, the bridge probes a managed Codex app-server connection. On macOS/Linux it uses a local Unix socket via `codex app-server --listen unix://`; on Windows it uses a localhost WebSocket via `codex app-server --listen ws://127.0.0.1:0`. If the app-server protocol is reachable, it sends turns through that backend so the bridge can receive live turn and item events. If the probe fails, it uses the normal `codex exec` backend.
 
 ## Telegram Commands
 
@@ -235,7 +235,7 @@ npm start
 
 같은 bot token으로 long polling consumer를 두 개 이상 동시에 실행하지 마세요. Telegram update가 한쪽으로만 전달될 수 있습니다.
 
-시작 시 bridge는 `codex app-server proxy`를 probe합니다. app-server 프로토콜에 접속할 수 있으면 해당 backend로 turn을 보내 연결된 Codex client가 live turn/item event를 받을 수 있게 하고, probe가 실패하면 일반 `codex exec` backend를 사용합니다.
+시작 시 bridge는 관리형 Codex app-server 연결을 probe합니다. macOS/Linux에서는 `codex app-server --listen unix://` 기반 로컬 Unix socket을 사용하고, Windows에서는 `codex app-server --listen ws://127.0.0.1:0` 기반 localhost WebSocket을 사용합니다. app-server 프로토콜에 접속할 수 있으면 해당 backend로 turn을 보내 bridge가 live turn/item event를 받을 수 있게 하고, probe가 실패하면 일반 `codex exec` backend를 사용합니다.
 
 ## Telegram 명령어
 
