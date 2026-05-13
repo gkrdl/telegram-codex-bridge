@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { loadConfig, assertConfig } from './config.js';
-import { AppServerRunner } from './appServerRunner.js';
 import { createCodexBackend } from './codexBackend.js';
 import { CodexRunner } from './codexRunner.js';
 import { findSession, readRecentSessions, upsertSessionIndex } from './codexSessions.js';
@@ -16,6 +18,7 @@ async function main() {
 
   const telegram = new TelegramClient({ token: config.telegramBotToken });
   const store = new SessionStore(config.stateFile);
+  const browserUseRuntime = findCodexAppBrowserUseRuntime();
   const execRunner = new CodexRunner({
     codexHome: config.codexHome,
     defaultCwd: config.defaultCwd,
@@ -24,16 +27,9 @@ async function main() {
     skipGitRepoCheck: config.skipGitRepoCheck,
     sandboxMode: config.sandboxMode || undefined,
     approvalPolicy: config.approvalPolicy || undefined,
+    browserUseRuntime,
   });
-  const appServerRunner = new AppServerRunner({
-    codexHome: config.codexHome,
-    defaultCwd: config.defaultCwd,
-    codexCommand: config.codexCommand,
-    model: config.model || undefined,
-    sandboxMode: config.sandboxMode || undefined,
-    approvalPolicy: config.approvalPolicy || undefined,
-  });
-  const codex = await createCodexBackend({ appServerRunner, execRunner });
+  const codex = await createCodexBackend({ execRunner });
 
   console.log(`telegram-codex-bridge started with config ${config.configPath}`);
   let offset;
@@ -311,6 +307,19 @@ function sleep(ms) {
 function cleanError(error) {
   const message = error?.message || String(error);
   return message.length <= 1500 ? message : `${message.slice(0, 1500)}\n...[truncated]`;
+}
+
+function findCodexAppBrowserUseRuntime() {
+  const resourcesPath = '/Applications/Codex.app/Contents/Resources';
+  const runtime = {
+    codexCliPath: join(resourcesPath, 'codex'),
+    nodeReplPath: join(resourcesPath, 'node_repl'),
+    nodePath: join(resourcesPath, 'node'),
+    backends: ['chrome', 'iab'],
+  };
+  return [runtime.codexCliPath, runtime.nodeReplPath, runtime.nodePath].every((path) => existsSync(path))
+    ? runtime
+    : undefined;
 }
 
 main().catch((error) => {

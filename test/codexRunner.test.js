@@ -102,6 +102,55 @@ test('adds sandbox and approval config when configured', async () => {
   assert.equal((await runner.resume('abc', 'continue')).finalMessage, 'done');
 });
 
+test('adds browser-use node_repl config to Codex exec when configured', async () => {
+  const runner = new CodexRunner({
+    spawn: fakeSpawn((command, args) => {
+      assert.equal(command, 'codex');
+      assert.deepEqual(args, [
+        'exec',
+        '--json',
+        '-c',
+        'features.js_repl=false',
+        '-c',
+        'mcp_servers.node_repl.command="/Applications/Codex.app/Contents/Resources/node_repl"',
+        '-c',
+        'mcp_servers.node_repl.args=[]',
+        '-c',
+        'mcp_servers.node_repl.startup_timeout_sec=120',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS="1000"',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_NODE_MODULE_DIRS=""',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_NODE_PATH="/Applications/Codex.app/Contents/Resources/node"',
+        '-c',
+        'mcp_servers.node_repl.env.CODEX_HOME="/home/user/.codex"',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_REQUEST_META="{\\"x-codex-browser-use-available-backends\\":[\\"chrome\\",\\"iab\\"]}"',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S="9990b9b3defcd92659e0d88c4cf847d97c64c0af047c4a24266821711c24749e"',
+        '-c',
+        'mcp_servers.node_repl.env.NODE_REPL_BROWSER_CLIENT_MARKETPLACE_NAME="openai-bundled"',
+        '-c',
+        'mcp_servers.node_repl.env.CODEX_CLI_PATH="/Applications/Codex.app/Contents/Resources/codex"',
+        '-C',
+        '/workspace',
+        '-',
+      ]);
+    }),
+    codexHome: '/home/user/.codex',
+    defaultCwd: '/workspace',
+    browserUseRuntime: {
+      codexCliPath: '/Applications/Codex.app/Contents/Resources/codex',
+      nodeReplPath: '/Applications/Codex.app/Contents/Resources/node_repl',
+      nodePath: '/Applications/Codex.app/Contents/Resources/node',
+      backends: ['chrome', 'iab'],
+    },
+  });
+
+  assert.equal((await runner.runNew('hello')).finalMessage, 'done');
+});
+
 test('extracts assistant text from Codex item.completed agent_message events', async () => {
   const runner = new CodexRunner({
     spawn: (command, args) => {

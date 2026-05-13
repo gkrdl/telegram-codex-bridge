@@ -10,6 +10,8 @@ export class CodexRunner {
     skipGitRepoCheck = false,
     sandboxMode,
     approvalPolicy,
+    browserUseRuntime,
+    trustedBrowserClientSha256s = ['9990b9b3defcd92659e0d88c4cf847d97c64c0af047c4a24266821711c24749e'],
   } = {}) {
     this.name = 'exec';
     this.spawn = spawn;
@@ -20,6 +22,8 @@ export class CodexRunner {
     this.skipGitRepoCheck = skipGitRepoCheck;
     this.sandboxMode = sandboxMode;
     this.approvalPolicy = approvalPolicy;
+    this.browserUseRuntime = browserUseRuntime;
+    this.trustedBrowserClientSha256s = trustedBrowserClientSha256s;
   }
 
   runNew(prompt, options = {}) {
@@ -62,6 +66,32 @@ export class CodexRunner {
     if (this.approvalPolicy) {
       args.push('-c', `approval_policy="${this.approvalPolicy}"`);
     }
+    for (const [key, value] of this.#browserUseConfigOverrides()) {
+      args.push('-c', `${key}=${value}`);
+    }
+  }
+
+  #browserUseConfigOverrides() {
+    const runtime = this.browserUseRuntime;
+    if (!runtime?.nodeReplPath || !runtime?.nodePath) {
+      return [];
+    }
+    const backends = Array.isArray(runtime.backends) ? runtime.backends : ['chrome'];
+    const requestMeta = JSON.stringify({ 'x-codex-browser-use-available-backends': backends });
+    return [
+      ['features.js_repl', 'false'],
+      ['mcp_servers.node_repl.command', tomlString(runtime.nodeReplPath)],
+      ['mcp_servers.node_repl.args', '[]'],
+      ['mcp_servers.node_repl.startup_timeout_sec', '120'],
+      ['mcp_servers.node_repl.env.NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS', tomlString('1000')],
+      ['mcp_servers.node_repl.env.NODE_REPL_NODE_MODULE_DIRS', tomlString('')],
+      ['mcp_servers.node_repl.env.NODE_REPL_NODE_PATH', tomlString(runtime.nodePath)],
+      ['mcp_servers.node_repl.env.CODEX_HOME', tomlString(this.codexHome || '')],
+      ['mcp_servers.node_repl.env.NODE_REPL_REQUEST_META', tomlString(requestMeta)],
+      ['mcp_servers.node_repl.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S', tomlString(this.trustedBrowserClientSha256s.join(','))],
+      ['mcp_servers.node_repl.env.NODE_REPL_BROWSER_CLIENT_MARKETPLACE_NAME', tomlString('openai-bundled')],
+      ...(runtime.codexCliPath ? [['mcp_servers.node_repl.env.CODEX_CLI_PATH', tomlString(runtime.codexCliPath)]] : []),
+    ];
   }
 
   #run(args, prompt, options = {}) {
@@ -151,6 +181,10 @@ function parseJsonLine(line) {
   } catch {
     return null;
   }
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
 }
 
 function extractAssistantText(event) {

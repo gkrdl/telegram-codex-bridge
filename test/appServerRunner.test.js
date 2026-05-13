@@ -23,6 +23,20 @@ function fakeAppServerConnection(script, assertEndpoint = () => {}) {
   return connectAppServer;
 }
 
+function fakeSpawn() {
+  const spawned = [];
+  const spawn = (command, args) => {
+    spawned.push({ command, args });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write() {} };
+    child.kill = () => child.emit('close', 0);
+    return child;
+  };
+  return { spawn, spawned };
+}
+
 function respond(connection, id, result) {
   connection.emit('message', JSON.stringify({ id, result }));
 }
@@ -40,7 +54,8 @@ test('probe succeeds when app-server websocket responds to thread/loaded/list', 
       respond(connection, request.id, { data: [], nextCursor: null });
     }
   });
-  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, probeTimeoutMs: 50 });
+  const { spawn } = fakeSpawn();
+  const runner = new AppServerRunner({ connectAppServer, spawn, probeTimeoutMs: 50 });
 
   assert.equal(await runner.probe(), true);
   assert.deepEqual(connectAppServer.requests.map((request) => request.method), ['initialize', 'thread/loaded/list']);
@@ -50,7 +65,8 @@ test('probe returns false when app-server websocket closes before responding', a
   const connectAppServer = fakeAppServerConnection(({ connection }) => {
     connection.emit('close');
   });
-  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, probeTimeoutMs: 50 });
+  const { spawn } = fakeSpawn();
+  const runner = new AppServerRunner({ connectAppServer, spawn, probeTimeoutMs: 50 });
 
   assert.equal(await runner.probe(), false);
 });
@@ -75,7 +91,7 @@ test('starts a new app-server thread and captures the final assistant message', 
   });
   const runner = new AppServerRunner({
     connectAppServer,
-    existsSync: () => true,
+    spawn: fakeSpawn().spawn,
     codexHome: '/home/user/.codex',
     defaultCwd: '/workspace',
     model: 'gpt-5.5',
@@ -108,7 +124,7 @@ test('resumes an app-server thread before starting a turn', async () => {
       notify(connection, 'turn/completed', { threadId: 'thread-1' });
     }
   });
-  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true, defaultCwd: '/workspace' });
+  const runner = new AppServerRunner({ connectAppServer, spawn: fakeSpawn().spawn, defaultCwd: '/workspace' });
 
   const result = await runner.resume('thread-1', 'continue');
 
@@ -135,7 +151,7 @@ test('treats a completed turn/start response as completion even without a notifi
       });
     }
   });
-  const runner = new AppServerRunner({ connectAppServer, existsSync: () => true });
+  const runner = new AppServerRunner({ connectAppServer, spawn: fakeSpawn().spawn });
 
   const result = await runner.runNew('hello');
 
@@ -143,18 +159,8 @@ test('treats a completed turn/start response as completion even without a notifi
   assert.equal(result.sessionId, 'thread-1');
 });
 
-test('starts a Unix socket app-server on macOS/Linux before connecting', async () => {
-  const spawned = [];
-  let socketExists = false;
-  const spawn = (command, args) => {
-    spawned.push({ command, args });
-    socketExists = true;
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = () => child.emit('close', 0);
-    return child;
-  };
+test('starts a stdio app-server before connecting', async () => {
+  const { spawn, spawned } = fakeSpawn();
   const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
     if (request.method === 'initialize') {
       respond(connection, request.id, {});
@@ -163,14 +169,13 @@ test('starts a Unix socket app-server on macOS/Linux before connecting', async (
       respond(connection, request.id, { data: [], nextCursor: null });
     }
   }, (endpoint) => {
-    assert.equal(endpoint.kind, 'unix');
-    assert.equal(endpoint.socketPath, '/tmp/codex-home/app-server-control/app-server-control.sock');
+    assert.equal(endpoint.kind, 'stdio');
+    assert.ok(endpoint.child);
   });
   const runner = new AppServerRunner({
     connectAppServer,
     codexCommand: 'codex',
     codexHome: '/tmp/codex-home',
-    existsSync: () => socketExists,
     platform: 'darwin',
     spawn,
     startTimeoutMs: 50,
@@ -178,21 +183,10 @@ test('starts a Unix socket app-server on macOS/Linux before connecting', async (
   });
 
   assert.equal(await runner.probe(), true);
-  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'unix://'] }]);
+  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--analytics-default-enabled'] }]);
 });
 
-test('restarts Unix app-server when a cached socket endpoint disappeared', async () => {
-  const spawned = [];
-  let socketExists = true;
-  const spawn = (command, args) => {
-    spawned.push({ command, args });
-    socketExists = true;
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = () => child.emit('close', 0);
-    return child;
-  };
+test('does not initialize the same app-server process twice after probe', async () => {
   const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
     if (request.method === 'initialize') {
       respond(connection, request.id, {});
@@ -200,63 +194,63 @@ test('restarts Unix app-server when a cached socket endpoint disappeared', async
     if (request.method === 'thread/loaded/list') {
       respond(connection, request.id, { data: [], nextCursor: null });
     }
-  }, () => {
-    if (!socketExists) {
-      const error = new Error('connect ENOENT /tmp/codex-home/app-server-control/app-server-control.sock');
-      error.code = 'ENOENT';
-      throw error;
+    if (request.method === 'thread/start') {
+      respond(connection, request.id, { thread: { id: 'thread-1' } });
+    }
+    if (request.method === 'turn/start') {
+      respond(connection, request.id, {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [{ type: 'agentMessage', text: 'done' }],
+        },
+      });
     }
   });
   const runner = new AppServerRunner({
     connectAppServer,
-    codexCommand: 'codex',
+    spawn: fakeSpawn().spawn,
+    probeTimeoutMs: 50,
+  });
+
+  assert.equal(await runner.probe(), true);
+  const result = await runner.runNew('hello');
+
+  assert.equal(result.finalMessage, 'done');
+  assert.deepEqual(connectAppServer.requests.map((request) => request.method), [
+    'initialize',
+    'thread/loaded/list',
+    'thread/start',
+    'turn/start',
+  ]);
+});
+
+test('adds Codex app browser-use node_repl config when paths are provided', async () => {
+  const { spawn, spawned } = fakeSpawn();
+  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
+    if (request.method === 'initialize') {
+      respond(connection, request.id, {});
+    }
+    if (request.method === 'thread/loaded/list') {
+      respond(connection, request.id, { data: [], nextCursor: null });
+    }
+  });
+  const runner = new AppServerRunner({
+    connectAppServer,
+    codexCommand: '/Applications/Codex.app/Contents/Resources/codex',
     codexHome: '/tmp/codex-home',
-    existsSync: () => socketExists,
-    platform: 'darwin',
+    nodeReplPath: '/Applications/Codex.app/Contents/Resources/node_repl',
+    nodePath: '/Applications/Codex.app/Contents/Resources/node',
+    browserUseBackends: ['chrome', 'iab'],
     spawn,
     startTimeoutMs: 50,
     probeTimeoutMs: 50,
   });
 
   assert.equal(await runner.probe(), true);
-  socketExists = false;
-  assert.equal(await runner.probe(), true);
-  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'unix://'] }]);
-});
-
-test('starts a localhost websocket app-server on Windows before connecting', async () => {
-  const spawned = [];
-  const spawn = (command, args) => {
-    spawned.push({ command, args });
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = () => child.emit('close', 0);
-    queueMicrotask(() => {
-      child.stdout.emit('data', Buffer.from('listening on: ws://127.0.0.1:32123\n'));
-    });
-    return child;
-  };
-  const connectAppServer = fakeAppServerConnection(({ request, connection }) => {
-    if (request.method === 'initialize') {
-      respond(connection, request.id, {});
-    }
-    if (request.method === 'thread/loaded/list') {
-      respond(connection, request.id, { data: [], nextCursor: null });
-    }
-  }, (endpoint) => {
-    assert.equal(endpoint.kind, 'websocket');
-    assert.equal(endpoint.url, 'ws://127.0.0.1:32123/rpc');
-  });
-  const runner = new AppServerRunner({
-    connectAppServer,
-    codexCommand: 'codex',
-    platform: 'win32',
-    spawn,
-    startTimeoutMs: 50,
-    probeTimeoutMs: 50,
-  });
-
-  assert.equal(await runner.probe(), true);
-  assert.deepEqual(spawned, [{ command: 'codex', args: ['app-server', '--listen', 'ws://127.0.0.1:0'] }]);
+  const args = spawned[0].args;
+  assert.ok(args.includes('mcp_servers.node_repl.command="/Applications/Codex.app/Contents/Resources/node_repl"'));
+  assert.ok(args.includes('mcp_servers.node_repl.env.NODE_REPL_NODE_PATH="/Applications/Codex.app/Contents/Resources/node"'));
+  assert.ok(args.includes('mcp_servers.node_repl.env.CODEX_CLI_PATH="/Applications/Codex.app/Contents/Resources/codex"'));
+  assert.ok(args.includes('mcp_servers.node_repl.env.NODE_REPL_REQUEST_META="{\\"x-codex-browser-use-available-backends\\":[\\"chrome\\",\\"iab\\"]}"'));
 });

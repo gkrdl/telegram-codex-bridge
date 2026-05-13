@@ -21,6 +21,10 @@ export class AppServerRunner {
     probeTimeoutMs = 1500,
     startTimeoutMs = 5000,
     socketPath,
+    nodeReplPath,
+    nodePath,
+    browserUseBackends = [],
+    trustedBrowserClientSha256s = ['9990b9b3defcd92659e0d88c4cf847d97c64c0af047c4a24266821711c24749e'],
   } = {}) {
     this.name = 'app-server';
     this.spawn = spawn;
@@ -36,14 +40,19 @@ export class AppServerRunner {
     this.probeTimeoutMs = probeTimeoutMs;
     this.startTimeoutMs = startTimeoutMs;
     this.socketPath = socketPath || join(this.codexHome, 'app-server-control', 'app-server-control.sock');
+    this.nodeReplPath = nodeReplPath;
+    this.nodePath = nodePath;
+    this.browserUseBackends = browserUseBackends;
+    this.trustedBrowserClientSha256s = trustedBrowserClientSha256s;
     this.serverChild = null;
     this.endpoint = null;
+    this.initialized = false;
   }
 
   async probe() {
     try {
       const client = await this.#createClient();
-      await client.initialize(this.probeTimeoutMs);
+      await this.#initializeClient(client, this.probeTimeoutMs);
       await client.request('thread/loaded/list', { limit: 1 }, this.probeTimeoutMs);
       client.close();
       return true;
@@ -90,6 +99,7 @@ export class AppServerRunner {
     this.serverChild?.kill?.();
     this.serverChild = null;
     this.endpoint = null;
+    this.initialized = false;
   }
 
   async #runThread(prompt, { start, onProgress } = {}) {
@@ -122,7 +132,7 @@ export class AppServerRunner {
         }
       });
 
-      await client.initialize();
+      await this.#initializeClient(client);
       sessionId = await start(client);
       if (sessionId && onProgress) {
         onProgress({ type: 'thread.started', thread_id: sessionId });
@@ -195,20 +205,50 @@ export class AppServerRunner {
       return this.endpoint;
     }
     this.#resetEndpoint();
-    if (this.platform === 'win32') {
-      this.endpoint = await this.#startWebSocketServer();
-      return this.endpoint;
-    }
-    const endpoint = {
-      kind: 'unix',
-      socketPath: this.socketPath,
-      url: 'ws://codex-app-server/rpc',
+    this.endpoint = this.#startStdioServer();
+    return this.endpoint;
+  }
+
+  #startStdioServer() {
+    return {
+      kind: 'stdio',
+      child: this.#spawnServer(this.#appServerArgs()),
     };
-    if (!this.existsSync(this.socketPath)) {
-      await this.#startUnixServer();
+  }
+
+  #appServerArgs() {
+    const args = ['app-server', '--analytics-default-enabled'];
+    for (const [key, value] of this.#appServerConfigOverrides()) {
+      args.push('-c', `${key}=${value}`);
     }
-    this.endpoint = endpoint;
-    return endpoint;
+    return args;
+  }
+
+  #appServerConfigOverrides() {
+    if (!this.nodeReplPath || !this.nodePath) {
+      return [];
+    }
+    const requestMeta = this.browserUseBackends.length > 0
+      ? JSON.stringify({ 'x-codex-browser-use-available-backends': this.browserUseBackends })
+      : '';
+    return [
+      ['features.js_repl', 'false'],
+      ['mcp_servers.node_repl.command', tomlString(this.nodeReplPath)],
+      ['mcp_servers.node_repl.args', '[]'],
+      ['mcp_servers.node_repl.startup_timeout_sec', '120'],
+      ['mcp_servers.node_repl.env.NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS', tomlString('1000')],
+      ['mcp_servers.node_repl.env.NODE_REPL_NODE_MODULE_DIRS', tomlString('')],
+      ['mcp_servers.node_repl.env.NODE_REPL_NODE_PATH', tomlString(this.nodePath)],
+      ['mcp_servers.node_repl.env.CODEX_HOME', tomlString(this.codexHome)],
+      ...(requestMeta ? [['mcp_servers.node_repl.env.NODE_REPL_REQUEST_META', tomlString(requestMeta)]] : []),
+      ...(this.trustedBrowserClientSha256s.length > 0
+        ? [
+            ['mcp_servers.node_repl.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S', tomlString(this.trustedBrowserClientSha256s.join(','))],
+            ['mcp_servers.node_repl.env.NODE_REPL_BROWSER_CLIENT_MARKETPLACE_NAME', tomlString('openai-bundled')],
+          ]
+        : []),
+      ['mcp_servers.node_repl.env.CODEX_CLI_PATH', tomlString(this.codexCommand)],
+    ];
   }
 
   #startUnixServer() {
@@ -262,25 +302,45 @@ export class AppServerRunner {
       env: {
         ...process.env,
         ...(this.codexHome ? { CODEX_HOME: this.codexHome } : {}),
+        CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex Desktop',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     child.once?.('close', () => {
       this.serverChild = null;
       this.endpoint = null;
+      this.initialized = false;
     });
     this.serverChild = child;
     return child;
   }
 
   #endpointStillExists(endpoint) {
-    return endpoint.kind !== 'unix' || this.existsSync(endpoint.socketPath);
+    return endpoint.kind === 'stdio'
+      ? this.serverChild === endpoint.child
+      : endpoint.kind !== 'unix' || this.existsSync(endpoint.socketPath);
   }
 
   #resetEndpoint() {
     this.endpoint = null;
+    this.initialized = false;
     this.serverChild?.kill?.();
     this.serverChild = null;
+  }
+
+  async #initializeClient(client, timeoutMs) {
+    if (this.initialized) {
+      return;
+    }
+    try {
+      await client.initialize(timeoutMs);
+      this.initialized = true;
+    } catch (error) {
+      if (!isAlreadyInitializedError(error)) {
+        throw error;
+      }
+      this.initialized = true;
+    }
   }
 }
 
@@ -403,12 +463,52 @@ async function waitFor({ test, timeoutMs, intervalMs = 25, timeoutMessage }) {
   throw new Error(timeoutMessage);
 }
 
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
 function defaultConnectAppServer(endpoint) {
+  if (endpoint.kind === 'stdio') {
+    return stdioConnection(endpoint.child);
+  }
   const url = new URL(endpoint.url);
   const socket = endpoint.kind === 'unix'
     ? net.createConnection(endpoint.socketPath)
     : net.createConnection(Number(url.port), url.hostname);
   return websocketConnection({ socket, host: url.host || 'codex-app-server', path: url.pathname || '/rpc' });
+}
+
+function stdioConnection(child) {
+  const connection = new EventEmitter();
+  let buffer = '';
+  const onData = (chunk) => {
+    buffer += chunk.toString('utf8');
+    for (;;) {
+      const newlineIndex = buffer.indexOf('\n');
+      if (newlineIndex === -1) {
+        break;
+      }
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line) {
+        connection.emit('message', line);
+      }
+    }
+  };
+  const onError = (error) => connection.emit('error', error);
+  const onClose = () => connection.emit('close');
+  child.stdout?.on?.('data', onData);
+  child.once?.('error', onError);
+  child.once?.('close', onClose);
+  connection.send = (message) => {
+    child.stdin.write(`${String(message)}\n`);
+  };
+  connection.close = () => {
+    child.stdout?.off?.('data', onData);
+    child.off?.('error', onError);
+    child.off?.('close', onClose);
+  };
+  return connection;
 }
 
 function websocketConnection({ socket, host, path }) {
@@ -566,6 +666,10 @@ function isRetryableConnectionError(error) {
   return error?.code === 'ENOENT'
     || error?.code === 'ECONNREFUSED'
     || /\b(?:ENOENT|ECONNREFUSED)\b/.test(error?.message || '');
+}
+
+function isAlreadyInitializedError(error) {
+  return /Already initialized/i.test(error?.message || String(error));
 }
 
 function notificationToProgressEvent(message) {

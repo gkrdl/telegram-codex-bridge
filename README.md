@@ -14,7 +14,7 @@ Telegram Codex Bridge is a small Node.js service that lets an allowlisted Telegr
 - Attach Telegram to an existing Codex session with `/attach`.
 - List recent Codex sessions with `/sessions`.
 - Send outbound Telegram notifications from scripts or automations.
-- Automatically use a reachable Codex app-server backend when available, and fall back to `codex exec` otherwise.
+- Run Codex through `codex exec` for predictable CLI-compatible behavior.
 - Optionally make Codex app session metadata visible in the desktop app session list without forcing the app to switch tabs.
 
 ## Requirements
@@ -89,7 +89,7 @@ npm start
 
 The bridge uses Telegram long polling. Do not run two long-polling consumers with the same bot token at the same time; Telegram updates may be delivered to only one of them.
 
-At startup, the bridge probes a managed Codex app-server connection. On macOS/Linux it uses a local Unix socket via `codex app-server --listen unix://`; on Windows it uses a localhost WebSocket via `codex app-server --listen ws://127.0.0.1:0`. If the app-server protocol is reachable, it sends turns through that backend so the bridge can receive live turn and item events. If the probe fails, it uses the normal `codex exec` backend.
+The bridge runs Codex through the normal `codex exec` backend. It does not start or probe a Codex app-server process. When the macOS Codex app bundle is installed at `/Applications/Codex.app`, the bridge also passes the app-bundled `node_repl` runtime to `codex exec` so Browser Use/Chrome extension automation can be bootstrapped from Codex skills.
 
 ## Telegram Commands
 
@@ -160,7 +160,7 @@ Telegram Codex Bridge는 Telegram에서 Codex CLI 세션을 시작하고 이어�
 - `/attach`로 기존 Codex 세션에 Telegram 채팅 연결.
 - `/sessions`로 최근 Codex 세션 목록 확인.
 - 스크립트나 자동화에서 Telegram 알림 발송.
-- 접속 가능한 Codex app-server backend가 있으면 자동 사용하고, 없으면 `codex exec`로 fallback.
+- 예측 가능한 CLI 호환 동작을 위해 `codex exec`로 Codex 실행.
 - Codex desktop 앱 세션 리스트에 bridge-created 세션이 보이도록 metadata 보정.
 
 ## 요구사항
@@ -235,7 +235,7 @@ npm start
 
 같은 bot token으로 long polling consumer를 두 개 이상 동시에 실행하지 마세요. Telegram update가 한쪽으로만 전달될 수 있습니다.
 
-시작 시 bridge는 관리형 Codex app-server 연결을 probe합니다. macOS/Linux에서는 `codex app-server --listen unix://` 기반 로컬 Unix socket을 사용하고, Windows에서는 `codex app-server --listen ws://127.0.0.1:0` 기반 localhost WebSocket을 사용합니다. app-server 프로토콜에 접속할 수 있으면 해당 backend로 turn을 보내 bridge가 live turn/item event를 받을 수 있게 하고, probe가 실패하면 일반 `codex exec` backend를 사용합니다.
+bridge는 일반 `codex exec` backend로 Codex를 실행합니다. Codex app-server 프로세스를 시작하거나 probe하지 않습니다. macOS Codex 앱 번들이 `/Applications/Codex.app`에 설치되어 있으면, bridge가 앱에 포함된 `node_repl` runtime을 `codex exec`에 넘겨 Browser Use/Chrome 확장 자동화를 Codex skill에서 bootstrap할 수 있게 합니다.
 
 ## Telegram 명령어
 

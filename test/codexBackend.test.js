@@ -14,17 +14,17 @@ class FakeRunner {
   }
 }
 
-test('selects app-server backend when probe succeeds', async () => {
+test('selects exec backend even when app-server probe would succeed', async () => {
   const backend = await createCodexBackend({
     appServerRunner: new FakeRunner('app-server', true),
     execRunner: new FakeRunner('exec', true),
     logger: noopLogger(),
   });
 
-  assert.equal(backend.name, 'app-server');
+  assert.equal(backend.name, 'exec');
 });
 
-test('falls back to exec backend when app-server probe fails', async () => {
+test('selects exec backend when app-server probe fails', async () => {
   const backend = await createCodexBackend({
     appServerRunner: new FakeRunner('app-server', false),
     execRunner: new FakeRunner('exec', true),
@@ -34,10 +34,10 @@ test('falls back to exec backend when app-server probe fails', async () => {
   assert.equal(backend.name, 'exec');
 });
 
-test('falls back to exec backend when app-server probe throws', async () => {
+test('does not probe app-server when selecting exec backend', async () => {
   const appServerRunner = new FakeRunner('app-server', true);
   appServerRunner.probe = async () => {
-    throw new Error('no socket');
+    throw new Error('probe should not be called');
   };
 
   const backend = await createCodexBackend({
