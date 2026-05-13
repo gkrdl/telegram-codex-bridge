@@ -68,6 +68,7 @@ export class CodexRunner {
       let stdout = '';
       let stderr = '';
       let finalMessage = '';
+      let sessionId = '';
       let pendingLine = '';
       const child = this.spawn(this.codexCommand, args, {
         env: {
@@ -87,6 +88,10 @@ export class CodexRunner {
           if (parsed && options.onProgress) {
             options.onProgress(parsed);
           }
+          const parsedSessionId = extractSessionId(parsed);
+          if (parsedSessionId) {
+            sessionId = parsedSessionId;
+          }
           const message = extractAssistantText(parsed);
           if (message) {
             finalMessage = message;
@@ -105,13 +110,17 @@ export class CodexRunner {
           if (parsed && options.onProgress) {
             options.onProgress(parsed);
           }
+          const parsedSessionId = extractSessionId(parsed);
+          if (parsedSessionId) {
+            sessionId = parsedSessionId;
+          }
           const message = extractAssistantText(parsed);
           if (message) {
             finalMessage = message;
           }
         }
         if (code === 0) {
-          resolve({ finalMessage: finalMessage || stdout.trim(), stdout, stderr });
+          resolve({ finalMessage: finalMessage || stdout.trim(), stdout, stderr, sessionId });
           return;
         }
         reject(new Error(`codex exited with ${code}: ${stderr || stdout}`));
@@ -120,6 +129,19 @@ export class CodexRunner {
       child.stdin.end(`${prompt}\n`);
     });
   }
+}
+
+function extractSessionId(event) {
+  if (!event || typeof event !== 'object') {
+    return '';
+  }
+  if (event.type === 'thread.started') {
+    return event.thread_id || event.threadId || '';
+  }
+  if (event.type === 'session_meta') {
+    return event.payload?.id || event.id || '';
+  }
+  return '';
 }
 
 function parseJsonLine(line) {

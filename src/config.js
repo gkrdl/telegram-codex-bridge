@@ -26,6 +26,7 @@ export async function loadConfig() {
     skipGitRepoCheck: parseBoolean(process.env.CODEX_SKIP_GIT_REPO_CHECK, fileConfig.skipGitRepoCheck ?? false),
     sandboxMode: process.env.CODEX_SANDBOX_MODE || fileConfig.sandboxMode || '',
     approvalPolicy: process.env.CODEX_APPROVAL_POLICY || fileConfig.approvalPolicy || '',
+    revealNewSessionsInCodexApp: parseBoolean(process.env.BRIDGE_REVEAL_CODEX_APP, fileConfig.revealNewSessionsInCodexApp ?? false),
     pollTimeoutSeconds: Number(process.env.TELEGRAM_POLL_TIMEOUT || fileConfig.pollTimeoutSeconds || 25),
     recentSessionLimit: Number(process.env.BRIDGE_SESSION_LIMIT || fileConfig.recentSessionLimit || 10),
   };

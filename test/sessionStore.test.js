@@ -13,14 +13,14 @@ test('persists and reloads active session per chat', async () => {
     const store = new SessionStore(file);
     await store.setActiveSession('123', {
       sessionId: 'abc',
-      cwd: '/Users/hak',
+      cwd: '/workspace',
       title: 'Bridge work',
     });
 
     const reloaded = new SessionStore(file);
     assert.deepEqual(await reloaded.getChatState('123'), {
       activeSessionId: 'abc',
-      activeCwd: '/Users/hak',
+      activeCwd: '/workspace',
       activeTitle: 'Bridge work',
     });
   } finally {

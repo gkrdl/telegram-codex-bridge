@@ -6,7 +6,7 @@
 
 **Architecture:** A small Node ESM service long-polls Telegram, routes commands, persists active sessions per chat, and invokes Codex CLI. The routing layer is isolated from Telegram and Codex process execution so it can be tested without network or model calls.
 
-**Tech Stack:** Node 26, built-in `node:test`, built-in `fetch`, Codex CLI.
+**Tech Stack:** Node 20+, built-in `node:test`, built-in `fetch`, Codex CLI.
 
 ---
 

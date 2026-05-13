@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { loadConfig, assertConfig } from './config.js';
+import { revealCodexThread } from './codexApp.js';
 import { CodexRunner } from './codexRunner.js';
-import { findSession, readRecentSessions } from './codexSessions.js';
+import { findSession, readRecentSessions, upsertSessionIndex } from './codexSessions.js';
+import { markThreadInteractive } from './codexStateDb.js';
 import { routeMessage, helpText } from './router.js';
 import { SessionStore } from './sessionStore.js';
 import { TelegramClient, getChatId, getMessageText, getSenderId } from './telegram.js';
@@ -104,13 +106,51 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
       return;
     }
     case 'new': {
+      let indexedSessionId = '';
+      let revealedSessionId = '';
+      const title = titleFromPrompt(decision.prompt);
       const result = await runCodexWithProgress({
         telegram,
         chatId,
         label: 'Starting new Codex session',
+        onEvent: (event) => {
+          const sessionId = event?.type === 'thread.started' ? event.thread_id : '';
+          if (!sessionId || indexedSessionId === sessionId) {
+            return;
+          }
+          indexedSessionId = sessionId;
+          void upsertSessionIndex(config.codexHome, {
+            id: sessionId,
+            title,
+            updatedAt: new Date().toISOString(),
+          }).catch((error) => {
+            console.error(`[session index ${chatId}] ${error.stack || error.message}`);
+          });
+          void markThreadInteractive(config.codexHome, sessionId).catch((error) => {
+            console.error(`[session metadata ${chatId}] ${error.stack || error.message}`);
+          });
+          if (config.revealNewSessionsInCodexApp) {
+            revealedSessionId = sessionId;
+            revealCodexThread(sessionId);
+          }
+        },
         run: (onProgress) => codex.runNew(decision.prompt, { onProgress }),
       });
-      const session = (await readRecentSessions(config.codexHome, 1))[0];
+      const sessionId = result.sessionId || indexedSessionId;
+      if (sessionId) {
+        await upsertSessionIndex(config.codexHome, {
+          id: sessionId,
+          title,
+          updatedAt: new Date().toISOString(),
+        });
+        await markThreadInteractive(config.codexHome, sessionId);
+        if (config.revealNewSessionsInCodexApp && revealedSessionId !== sessionId) {
+          revealCodexThread(sessionId);
+        }
+      }
+      const session = sessionId
+        ? await findSession(config.codexHome, sessionId)
+        : (await readRecentSessions(config.codexHome, 1))[0];
       if (session) {
         await store.setActiveSession(chatId, {
           sessionId: session.id,
@@ -164,7 +204,7 @@ function formatResult(message, session) {
   return `${message}\n\nActive session: ${session.title}\n${session.id}`;
 }
 
-async function runCodexWithProgress({ telegram, chatId, label, run }) {
+async function runCodexWithProgress({ telegram, chatId, label, run, onEvent }) {
   const progressMessage = await telegram.sendMessage(chatId, `${label}...\nStatus: queued`);
   let lastEditAt = 0;
   let lastText = '';
@@ -191,6 +231,9 @@ async function runCodexWithProgress({ telegram, chatId, label, run }) {
 
   try {
     const result = await run((event) => {
+      if (onEvent) {
+        onEvent(event);
+      }
       const item = progressLine(event);
       if (!item) {
         return;
@@ -205,6 +248,14 @@ async function runCodexWithProgress({ telegram, chatId, label, run }) {
     await editProgress(`${label}\nStatus: failed`, true);
     throw error;
   }
+}
+
+function titleFromPrompt(prompt) {
+  const compact = String(prompt ?? '').replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return 'Telegram Codex session';
+  }
+  return compact.length <= 80 ? compact : `${compact.slice(0, 77)}...`;
 }
 
 function progressLine(event) {

@@ -1,10 +1,16 @@
 {
   "name": "telegram-codex-bridge",
   "version": "0.1.0",
-  "private": true,
+  "description": "A Telegram bot bridge for running and resuming Codex CLI sessions.",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gkrdl/telegram-codex-bridge.git"
+  },
   "scripts": {
     "start": "node src/index.js",
+    "send": "node src/sendMessageCli.js",
     "test": "node --test"
   },
   "engines": {
