@@ -11,6 +11,7 @@ export class CodexRunner {
     sandboxMode,
     approvalPolicy,
   } = {}) {
+    this.name = 'exec';
     this.spawn = spawn;
     this.codexHome = codexHome;
     this.defaultCwd = defaultCwd;

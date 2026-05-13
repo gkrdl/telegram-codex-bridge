@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig, assertConfig } from './config.js';
+import { AppServerRunner } from './appServerRunner.js';
+import { createCodexBackend } from './codexBackend.js';
 import { CodexRunner } from './codexRunner.js';
 import { findSession, readRecentSessions, upsertSessionIndex } from './codexSessions.js';
 import { markThreadInteractive } from './codexStateDb.js';
@@ -14,7 +16,7 @@ async function main() {
 
   const telegram = new TelegramClient({ token: config.telegramBotToken });
   const store = new SessionStore(config.stateFile);
-  const codex = new CodexRunner({
+  const execRunner = new CodexRunner({
     codexHome: config.codexHome,
     defaultCwd: config.defaultCwd,
     codexCommand: config.codexCommand,
@@ -23,6 +25,15 @@ async function main() {
     sandboxMode: config.sandboxMode || undefined,
     approvalPolicy: config.approvalPolicy || undefined,
   });
+  const appServerRunner = new AppServerRunner({
+    codexHome: config.codexHome,
+    defaultCwd: config.defaultCwd,
+    codexCommand: config.codexCommand,
+    model: config.model || undefined,
+    sandboxMode: config.sandboxMode || undefined,
+    approvalPolicy: config.approvalPolicy || undefined,
+  });
+  const codex = await createCodexBackend({ appServerRunner, execRunner });
 
   console.log(`telegram-codex-bridge started with config ${config.configPath}`);
   let offset;

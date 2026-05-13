@@ -14,6 +14,7 @@ Telegram Codex Bridge is a small Node.js service that lets an allowlisted Telegr
 - Attach Telegram to an existing Codex session with `/attach`.
 - List recent Codex sessions with `/sessions`.
 - Send outbound Telegram notifications from scripts or automations.
+- Automatically use a reachable Codex app-server backend when available, and fall back to `codex exec` otherwise.
 - Optionally make Codex app session metadata visible in the desktop app session list without forcing the app to switch tabs.
 
 ## Requirements
@@ -88,6 +89,8 @@ npm start
 
 The bridge uses Telegram long polling. Do not run two long-polling consumers with the same bot token at the same time; Telegram updates may be delivered to only one of them.
 
+At startup, the bridge probes `codex app-server proxy`. If the app-server protocol is reachable, it sends turns through that backend so connected Codex clients can receive live turn and item events. If the probe fails, it uses the normal `codex exec` backend.
+
 ## Telegram Commands
 
 - `/new <prompt>` starts a new persistent Codex session and attaches this chat to it.
@@ -124,7 +127,7 @@ That behavior is enabled by the bridge code when a new session is created. The b
 
 - Never commit `telegram-bot-token`, local `config.json`, or state files.
 - Keep `allowedUsers` restricted to your own Telegram user ID or trusted users.
-- `sandboxMode` and `approvalPolicy` are passed directly to Codex CLI. Choose values that match your risk tolerance.
+- `sandboxMode` and `approvalPolicy` are passed directly to Codex. Choose values that match your risk tolerance.
 - This bridge forwards Telegram prompts to Codex. Treat allowlisted Telegram access as local agent access.
 
 ## Test
@@ -157,6 +160,7 @@ Telegram Codex Bridge는 Telegram에서 Codex CLI 세션을 시작하고 이어�
 - `/attach`로 기존 Codex 세션에 Telegram 채팅 연결.
 - `/sessions`로 최근 Codex 세션 목록 확인.
 - 스크립트나 자동화에서 Telegram 알림 발송.
+- 접속 가능한 Codex app-server backend가 있으면 자동 사용하고, 없으면 `codex exec`로 fallback.
 - Codex desktop 앱 세션 리스트에 bridge-created 세션이 보이도록 metadata 보정.
 
 ## 요구사항
@@ -231,6 +235,8 @@ npm start
 
 같은 bot token으로 long polling consumer를 두 개 이상 동시에 실행하지 마세요. Telegram update가 한쪽으로만 전달될 수 있습니다.
 
+시작 시 bridge는 `codex app-server proxy`를 probe합니다. app-server 프로토콜에 접속할 수 있으면 해당 backend로 turn을 보내 연결된 Codex client가 live turn/item event를 받을 수 있게 하고, probe가 실패하면 일반 `codex exec` backend를 사용합니다.
+
 ## Telegram 명령어
 
 - `/new <내용>`: 새 지속 Codex 세션을 시작하고 이 채팅에 연결합니다.
@@ -267,7 +273,7 @@ npm run send -- --dry-run --chat-id 123456789 "자동화 완료"
 
 - `telegram-bot-token`, 로컬 `config.json`, state 파일을 commit하지 마세요.
 - `allowedUsers`는 본인 또는 신뢰하는 Telegram user ID로 제한하세요.
-- `sandboxMode`, `approvalPolicy`는 Codex CLI에 그대로 전달됩니다. 위험 허용 범위에 맞춰 선택하세요.
+- `sandboxMode`, `approvalPolicy`는 Codex에 그대로 전달됩니다. 위험 허용 범위에 맞춰 선택하세요.
 - 이 bridge는 Telegram prompt를 Codex에 전달합니다. allowlist에 들어간 Telegram 접근은 로컬 agent 접근과 비슷하게 취급해야 합니다.
 
 ## 테스트
