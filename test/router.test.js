@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { routeMessage } from '../src/router.js';
+import { helpText, routeMessage } from '../src/router.js';
 
 test('routes /new to a new persistent Codex session', () => {
   assert.deepEqual(routeMessage('/new build the bridge', { activeSessionId: 'old' }), {
@@ -52,4 +52,11 @@ test('routes /attach with a session id', () => {
     action: 'attach',
     sessionId: '019e21d8-0d39-7ac3-8433-384449487aed',
   });
+});
+
+test('help text is localized in Korean', () => {
+  const text = helpText();
+  assert.match(text, /명령어/);
+  assert.match(text, /새 Codex 세션/);
+  assert.match(text, /일반 메시지/);
 });
