@@ -1,5 +1,9 @@
 # Telegram Codex Bridge
 
+[English](#english) | [한국어](#한국어)
+
+<a id="english"></a>
+
 Telegram Codex Bridge is a small Node.js service that lets an allowlisted Telegram user start, resume, and inspect Codex CLI sessions from Telegram. It uses Telegram long polling, so it does not need a public webhook URL.
 
 ## Features
@@ -137,9 +141,15 @@ npm test
 
 MIT
 
+[Back to top](#telegram-codex-bridge)
+
 ---
 
+<a id="한국어"></a>
+
 # Telegram Codex Bridge 한국어
+
+[English](#english) | [한국어](#한국어)
 
 Telegram Codex Bridge는 Telegram에서 Codex CLI 세션을 시작하고 이어갈 수 있게 해주는 작은 Node.js 서비스입니다. Telegram long polling을 사용하므로 공개 webhook URL이 필요 없습니다.
 
@@ -277,3 +287,5 @@ npm test
 ## 라이선스
 
 MIT
+
+[맨 위로](#telegram-codex-bridge)
