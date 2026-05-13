@@ -5,6 +5,7 @@ import { findSession, readRecentSessions } from './codexSessions.js';
 import { routeMessage, helpText } from './router.js';
 import { SessionStore } from './sessionStore.js';
 import { TelegramClient, getChatId, getMessageText, getSenderId } from './telegram.js';
+import { markdownToTelegramHtml } from './telegramFormat.js';
 
 async function main() {
   const config = await loadConfig();
@@ -18,6 +19,8 @@ async function main() {
     codexCommand: config.codexCommand,
     model: config.model || undefined,
     skipGitRepoCheck: config.skipGitRepoCheck,
+    sandboxMode: config.sandboxMode || undefined,
+    approvalPolicy: config.approvalPolicy || undefined,
   });
 
   console.log(`telegram-codex-bridge started with config ${config.configPath}`);
@@ -91,14 +94,22 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
       return;
     }
     case 'once': {
-      await telegram.sendMessage(chatId, 'Running one-off Codex task...');
-      const result = await codex.runOnce(decision.prompt);
-      await telegram.sendMessage(chatId, result.finalMessage);
+      const result = await runCodexWithProgress({
+        telegram,
+        chatId,
+        label: 'Running one-off Codex task',
+        run: (onProgress) => codex.runOnce(decision.prompt, { onProgress }),
+      });
+      await sendFinalAnswer(telegram, chatId, result.finalMessage);
       return;
     }
     case 'new': {
-      await telegram.sendMessage(chatId, 'Starting a new Codex session...');
-      const result = await codex.runNew(decision.prompt);
+      const result = await runCodexWithProgress({
+        telegram,
+        chatId,
+        label: 'Starting new Codex session',
+        run: (onProgress) => codex.runNew(decision.prompt, { onProgress }),
+      });
       const session = (await readRecentSessions(config.codexHome, 1))[0];
       if (session) {
         await store.setActiveSession(chatId, {
@@ -107,13 +118,17 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
           title: session.title,
         });
       }
-      await telegram.sendMessage(chatId, formatResult(result.finalMessage, session));
+      await sendFinalAnswer(telegram, chatId, formatResult(result.finalMessage, session));
       return;
     }
     case 'resume': {
-      await telegram.sendMessage(chatId, `Continuing Codex session ${decision.sessionId}...`);
-      const result = await codex.resume(decision.sessionId, decision.prompt);
-      await telegram.sendMessage(chatId, result.finalMessage);
+      const result = await runCodexWithProgress({
+        telegram,
+        chatId,
+        label: `Continuing Codex session ${decision.sessionId}`,
+        run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress }),
+      });
+      await sendFinalAnswer(telegram, chatId, result.finalMessage);
       return;
     }
     default:
@@ -147,6 +162,93 @@ function formatResult(message, session) {
     return message;
   }
   return `${message}\n\nActive session: ${session.title}\n${session.id}`;
+}
+
+async function runCodexWithProgress({ telegram, chatId, label, run }) {
+  const progressMessage = await telegram.sendMessage(chatId, `${label}...\nStatus: queued`);
+  let lastEditAt = 0;
+  let lastText = '';
+  const progressItems = [];
+
+  const editProgress = async (text, force = false) => {
+    const now = Date.now();
+    if (!force && now - lastEditAt < 1500) {
+      return;
+    }
+    if (text === lastText) {
+      return;
+    }
+    lastEditAt = now;
+    lastText = text;
+    try {
+      await telegram.editMessageText(chatId, progressMessage.message_id, text);
+    } catch (error) {
+      if (!String(error.message || '').includes('message is not modified')) {
+        console.error(`[progress edit ${chatId}] ${error.stack || error.message}`);
+      }
+    }
+  };
+
+  try {
+    const result = await run((event) => {
+      const item = progressLine(event);
+      if (!item) {
+        return;
+      }
+      progressItems.push(item);
+      const recent = progressItems.slice(-5).map((line) => `- ${line}`).join('\n');
+      void editProgress(`${label}...\n${recent}`);
+    });
+    await editProgress(`${label}\nStatus: completed`, true);
+    return result;
+  } catch (error) {
+    await editProgress(`${label}\nStatus: failed`, true);
+    throw error;
+  }
+}
+
+function progressLine(event) {
+  if (!event || typeof event !== 'object') {
+    return '';
+  }
+  if (event.type === 'thread.started') {
+    return `thread ${event.thread_id || 'started'}`;
+  }
+  if (event.type === 'turn.started') {
+    return 'turn started';
+  }
+  if (event.type === 'turn.completed') {
+    return 'turn completed';
+  }
+  if (event.type === 'item.started') {
+    return describeItem(event.item, 'started');
+  }
+  if (event.type === 'item.completed') {
+    return describeItem(event.item, 'completed');
+  }
+  return event.type ? String(event.type) : '';
+}
+
+function describeItem(item, fallback) {
+  if (!item || typeof item !== 'object') {
+    return fallback;
+  }
+  if (item.type === 'agent_message') {
+    return 'assistant response ready';
+  }
+  if (item.type === 'tool_call') {
+    return `tool ${item.name || item.call_id || fallback}`;
+  }
+  return `${item.type || 'item'} ${fallback}`;
+}
+
+async function sendFinalAnswer(telegram, chatId, markdown) {
+  try {
+    await telegram.sendMessage(chatId, markdownToTelegramHtml(markdown), { parseMode: 'HTML' });
+  } catch (error) {
+    console.error(`[telegram html fallback ${chatId}] ${error.stack || error.message}`);
+    await telegram.sendMessage(chatId, markdown);
+  }
 }
 
 function sleep(ms) {

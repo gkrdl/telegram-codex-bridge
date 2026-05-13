@@ -77,6 +77,31 @@ test('adds skip git repo check when configured', async () => {
   assert.equal((await runner.runNew('hello')).finalMessage, 'done');
 });
 
+test('adds sandbox and approval config when configured', async () => {
+  const runner = new CodexRunner({
+    spawn: fakeSpawn((command, args) => {
+      assert.equal(command, 'codex');
+      assert.deepEqual(args, [
+        'exec',
+        'resume',
+        'abc',
+        '--json',
+        '-c',
+        'sandbox_mode="danger-full-access"',
+        '-c',
+        'approval_policy="never"',
+        '-',
+      ]);
+    }),
+    codexHome: '/Users/hak/.codex',
+    defaultCwd: '/Users/hak',
+    sandboxMode: 'danger-full-access',
+    approvalPolicy: 'never',
+  });
+
+  assert.equal((await runner.resume('abc', 'continue')).finalMessage, 'done');
+});
+
 test('extracts assistant text from Codex item.completed agent_message events', async () => {
   const runner = new CodexRunner({
     spawn: (command, args) => {
@@ -102,4 +127,29 @@ test('extracts assistant text from Codex item.completed agent_message events', a
   });
 
   assert.equal((await runner.runOnce('quick')).finalMessage, '안녕');
+});
+
+test('emits progress events while reading Codex JSONL', async () => {
+  const events = [];
+  const runner = new CodexRunner({
+    spawn: (command, args) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { end() {} };
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'thread.started', thread_id: 't' }) + '\n'));
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'turn.started' }) + '\n'));
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }) + '\n'));
+        child.emit('close', 0);
+      });
+      return child;
+    },
+    codexHome: '/Users/hak/.codex',
+    defaultCwd: '/Users/hak',
+  });
+
+  const result = await runner.runOnce('quick', { onProgress: (event) => events.push(event.type) });
+  assert.equal(result.finalMessage, 'done');
+  assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed']);
 });

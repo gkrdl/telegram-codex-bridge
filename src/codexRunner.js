@@ -1,13 +1,24 @@
 import { spawn as defaultSpawn } from 'node:child_process';
 
 export class CodexRunner {
-  constructor({ spawn = defaultSpawn, codexHome, defaultCwd, codexCommand = 'codex', model, skipGitRepoCheck = false } = {}) {
+  constructor({
+    spawn = defaultSpawn,
+    codexHome,
+    defaultCwd,
+    codexCommand = 'codex',
+    model,
+    skipGitRepoCheck = false,
+    sandboxMode,
+    approvalPolicy,
+  } = {}) {
     this.spawn = spawn;
     this.codexHome = codexHome;
     this.defaultCwd = defaultCwd;
     this.codexCommand = codexCommand;
     this.model = model;
     this.skipGitRepoCheck = skipGitRepoCheck;
+    this.sandboxMode = sandboxMode;
+    this.approvalPolicy = approvalPolicy;
   }
 
   runNew(prompt, options = {}) {
@@ -17,16 +28,17 @@ export class CodexRunner {
       args.push('-m', this.model);
     }
     args.push('-C', options.cwd ?? this.defaultCwd, '-');
-    return this.#run(args, prompt);
+    return this.#run(args, prompt, options);
   }
 
-  resume(sessionId, prompt) {
+  resume(sessionId, prompt, options = {}) {
     const args = ['exec', 'resume', sessionId, '--json'];
+    this.#addCommonArgs(args);
     if (this.model) {
       args.push('-m', this.model);
     }
     args.push('-');
-    return this.#run(args, prompt);
+    return this.#run(args, prompt, options);
   }
 
   runOnce(prompt, options = {}) {
@@ -36,20 +48,27 @@ export class CodexRunner {
       args.push('-m', this.model);
     }
     args.push('-C', options.cwd ?? this.defaultCwd, '-');
-    return this.#run(args, prompt);
+    return this.#run(args, prompt, options);
   }
 
   #addCommonArgs(args) {
     if (this.skipGitRepoCheck) {
       args.push('--skip-git-repo-check');
     }
+    if (this.sandboxMode) {
+      args.push('-c', `sandbox_mode="${this.sandboxMode}"`);
+    }
+    if (this.approvalPolicy) {
+      args.push('-c', `approval_policy="${this.approvalPolicy}"`);
+    }
   }
 
-  #run(args, prompt) {
+  #run(args, prompt, options = {}) {
     return new Promise((resolve, reject) => {
       let stdout = '';
       let stderr = '';
       let finalMessage = '';
+      let pendingLine = '';
       const child = this.spawn(this.codexCommand, args, {
         env: {
           ...process.env,
@@ -61,8 +80,13 @@ export class CodexRunner {
       child.stdout.on('data', (chunk) => {
         const text = chunk.toString('utf8');
         stdout += text;
-        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+        const lines = `${pendingLine}${text}`.split(/\r?\n/);
+        pendingLine = lines.pop() ?? '';
+        for (const line of lines.filter(Boolean)) {
           const parsed = parseJsonLine(line);
+          if (parsed && options.onProgress) {
+            options.onProgress(parsed);
+          }
           const message = extractAssistantText(parsed);
           if (message) {
             finalMessage = message;
@@ -76,6 +100,16 @@ export class CodexRunner {
 
       child.on('error', reject);
       child.on('close', (code) => {
+        if (pendingLine) {
+          const parsed = parseJsonLine(pendingLine);
+          if (parsed && options.onProgress) {
+            options.onProgress(parsed);
+          }
+          const message = extractAssistantText(parsed);
+          if (message) {
+            finalMessage = message;
+          }
+        }
         if (code === 0) {
           resolve({ finalMessage: finalMessage || stdout.trim(), stdout, stderr });
           return;

@@ -24,6 +24,8 @@ export async function loadConfig() {
     codexCommand: process.env.CODEX_COMMAND || fileConfig.codexCommand || 'codex',
     model: process.env.CODEX_MODEL || fileConfig.model || '',
     skipGitRepoCheck: parseBoolean(process.env.CODEX_SKIP_GIT_REPO_CHECK, fileConfig.skipGitRepoCheck ?? false),
+    sandboxMode: process.env.CODEX_SANDBOX_MODE || fileConfig.sandboxMode || '',
+    approvalPolicy: process.env.CODEX_APPROVAL_POLICY || fileConfig.approvalPolicy || '',
     pollTimeoutSeconds: Number(process.env.TELEGRAM_POLL_TIMEOUT || fileConfig.pollTimeoutSeconds || 25),
     recentSessionLimit: Number(process.env.BRIDGE_SESSION_LIMIT || fileConfig.recentSessionLimit || 10),
   };

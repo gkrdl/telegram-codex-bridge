@@ -20,19 +20,39 @@ export class TelegramClient {
     return body.result;
   }
 
-  async sendMessage(chatId, text) {
+  async sendMessage(chatId, text, options = {}) {
     const response = await this.fetch(`${this.baseUrl}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
         text: truncateTelegramText(text),
+        ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
         disable_web_page_preview: true,
       }),
     });
     const body = await response.json();
     if (!body.ok) {
       throw new Error(`Telegram sendMessage failed: ${body.description || response.status}`);
+    }
+    return body.result;
+  }
+
+  async editMessageText(chatId, messageId, text, options = {}) {
+    const response = await this.fetch(`${this.baseUrl}/editMessageText`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text: truncateTelegramText(text),
+        ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
+        disable_web_page_preview: true,
+      }),
+    });
+    const body = await response.json();
+    if (!body.ok) {
+      throw new Error(`Telegram editMessageText failed: ${body.description || response.status}`);
     }
     return body.result;
   }
