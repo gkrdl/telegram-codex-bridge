@@ -23,6 +23,7 @@ export async function loadConfig() {
     defaultCwd: expandHome(process.env.BRIDGE_DEFAULT_CWD || fileConfig.defaultCwd || homedir()),
     codexCommand: process.env.CODEX_COMMAND || fileConfig.codexCommand || 'codex',
     model: process.env.CODEX_MODEL || fileConfig.model || '',
+    skipGitRepoCheck: parseBoolean(process.env.CODEX_SKIP_GIT_REPO_CHECK, fileConfig.skipGitRepoCheck ?? false),
     pollTimeoutSeconds: Number(process.env.TELEGRAM_POLL_TIMEOUT || fileConfig.pollTimeoutSeconds || 25),
     recentSessionLimit: Number(process.env.BRIDGE_SESSION_LIMIT || fileConfig.recentSessionLimit || 10),
   };
@@ -69,4 +70,11 @@ function expandHome(path) {
     return resolve(homedir(), path.slice(2));
   }
   return path;
+}
+
+function parseBoolean(envValue, defaultValue) {
+  if (envValue === undefined) {
+    return Boolean(defaultValue);
+  }
+  return ['1', 'true', 'yes', 'on'].includes(String(envValue).toLowerCase());
 }

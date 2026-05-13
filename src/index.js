@@ -17,6 +17,7 @@ async function main() {
     defaultCwd: config.defaultCwd,
     codexCommand: config.codexCommand,
     model: config.model || undefined,
+    skipGitRepoCheck: config.skipGitRepoCheck,
   });
 
   console.log(`telegram-codex-bridge started with config ${config.configPath}`);
@@ -47,9 +48,14 @@ async function handleUpdate({ update, telegram, store, codex, config }) {
     return;
   }
 
-  const chatState = await store.getChatState(chatId);
-  const decision = routeMessage(text, chatState);
-  await executeDecision({ decision, chatId, telegram, store, codex, config });
+  try {
+    const chatState = await store.getChatState(chatId);
+    const decision = routeMessage(text, chatState);
+    await executeDecision({ decision, chatId, telegram, store, codex, config });
+  } catch (error) {
+    console.error(`[chat ${chatId}] ${error.stack || error.message}`);
+    await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
+  }
 }
 
 async function executeDecision({ decision, chatId, telegram, store, codex, config }) {
@@ -145,6 +151,11 @@ function formatResult(message, session) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cleanError(error) {
+  const message = error?.message || String(error);
+  return message.length <= 1500 ? message : `${message.slice(0, 1500)}\n...[truncated]`;
 }
 
 main().catch((error) => {

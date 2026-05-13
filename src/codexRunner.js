@@ -1,16 +1,18 @@
 import { spawn as defaultSpawn } from 'node:child_process';
 
 export class CodexRunner {
-  constructor({ spawn = defaultSpawn, codexHome, defaultCwd, codexCommand = 'codex', model } = {}) {
+  constructor({ spawn = defaultSpawn, codexHome, defaultCwd, codexCommand = 'codex', model, skipGitRepoCheck = false } = {}) {
     this.spawn = spawn;
     this.codexHome = codexHome;
     this.defaultCwd = defaultCwd;
     this.codexCommand = codexCommand;
     this.model = model;
+    this.skipGitRepoCheck = skipGitRepoCheck;
   }
 
   runNew(prompt, options = {}) {
     const args = ['exec', '--json'];
+    this.#addCommonArgs(args);
     if (this.model) {
       args.push('-m', this.model);
     }
@@ -29,11 +31,18 @@ export class CodexRunner {
 
   runOnce(prompt, options = {}) {
     const args = ['exec', '--json', '--ephemeral'];
+    this.#addCommonArgs(args);
     if (this.model) {
       args.push('-m', this.model);
     }
     args.push('-C', options.cwd ?? this.defaultCwd, '-');
     return this.#run(args, prompt);
+  }
+
+  #addCommonArgs(args) {
+    if (this.skipGitRepoCheck) {
+      args.push('--skip-git-repo-check');
+    }
   }
 
   #run(args, prompt) {
@@ -96,6 +105,9 @@ function extractAssistantText(event) {
   }
   if (event.type === 'agent_message' || event.type === 'final_message') {
     return contentToText(event.message ?? event.content ?? event.text);
+  }
+  if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
+    return contentToText(event.item.text ?? event.item.content);
   }
   return '';
 }

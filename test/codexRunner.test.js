@@ -62,3 +62,44 @@ test('runs a one-off ephemeral Codex exec', async () => {
 
   assert.equal((await runner.runOnce('quick')).finalMessage, 'done');
 });
+
+test('adds skip git repo check when configured', async () => {
+  const runner = new CodexRunner({
+    spawn: fakeSpawn((command, args) => {
+      assert.equal(command, 'codex');
+      assert.deepEqual(args, ['exec', '--json', '--skip-git-repo-check', '-C', '/Users/hak', '-']);
+    }),
+    codexHome: '/Users/hak/.codex',
+    defaultCwd: '/Users/hak',
+    skipGitRepoCheck: true,
+  });
+
+  assert.equal((await runner.runNew('hello')).finalMessage, 'done');
+});
+
+test('extracts assistant text from Codex item.completed agent_message events', async () => {
+  const runner = new CodexRunner({
+    spawn: (command, args) => {
+      assert.equal(command, 'codex');
+      assert.deepEqual(args, ['exec', '--json', '--ephemeral', '-C', '/Users/hak', '-']);
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { end() {} };
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from([
+          JSON.stringify({ type: 'thread.started', thread_id: 't' }),
+          JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '안녕' } }),
+          JSON.stringify({ type: 'turn.completed' }),
+          '',
+        ].join('\n')));
+        child.emit('close', 0);
+      });
+      return child;
+    },
+    codexHome: '/Users/hak/.codex',
+    defaultCwd: '/Users/hak',
+  });
+
+  assert.equal((await runner.runOnce('quick')).finalMessage, '안녕');
+});
