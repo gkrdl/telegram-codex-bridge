@@ -151,6 +151,25 @@ test('adds browser-use node_repl config to Codex exec when configured', async ()
   assert.equal((await runner.runNew('hello')).finalMessage, 'done');
 });
 
+test('skips browser-use node_repl config when disabled per run', async () => {
+  const runner = new CodexRunner({
+    spawn: fakeSpawn((command, args) => {
+      assert.equal(command, 'codex');
+      assert.deepEqual(args, ['exec', '--json', '-C', '/workspace', '-']);
+    }),
+    codexHome: '/home/user/.codex',
+    defaultCwd: '/workspace',
+    browserUseRuntime: {
+      codexCliPath: '/Applications/Codex.app/Contents/Resources/codex',
+      nodeReplPath: '/Applications/Codex.app/Contents/Resources/node_repl',
+      nodePath: '/Applications/Codex.app/Contents/Resources/node',
+      backends: ['chrome', 'iab'],
+    },
+  });
+
+  assert.equal((await runner.runNew('hello', { browserUseEnabled: false })).finalMessage, 'done');
+});
+
 test('extracts assistant text from Codex item.completed agent_message events', async () => {
   const runner = new CodexRunner({
     spawn: (command, args) => {

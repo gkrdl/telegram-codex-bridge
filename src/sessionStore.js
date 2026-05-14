@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 export class SessionStore {
   constructor(filePath) {
     this.filePath = filePath;
+    this.writeTail = Promise.resolve();
+    this.nextWriteId = 1;
   }
 
   async getChatState(chatId) {
@@ -12,22 +14,32 @@ export class SessionStore {
   }
 
   async setActiveSession(chatId, session) {
-    const state = await this.#readState();
-    state.chats ??= {};
-    state.chats[String(chatId)] = {
-      activeSessionId: session.sessionId,
-      activeCwd: session.cwd,
-      activeTitle: session.title,
-    };
-    await this.#writeState(state);
+    await this.#updateState((state) => {
+      state.chats ??= {};
+      state.chats[String(chatId)] = {
+        activeSessionId: session.sessionId,
+        activeCwd: session.cwd,
+        activeTitle: session.title,
+      };
+    });
   }
 
   async forgetChat(chatId) {
-    const state = await this.#readState();
-    if (state.chats) {
-      delete state.chats[String(chatId)];
-    }
-    await this.#writeState(state);
+    await this.#updateState((state) => {
+      if (state.chats) {
+        delete state.chats[String(chatId)];
+      }
+    });
+  }
+
+  async #updateState(update) {
+    const task = this.writeTail.catch(() => {}).then(async () => {
+      const state = await this.#readState();
+      update(state);
+      await this.#writeState(state);
+    });
+    this.writeTail = task;
+    await task;
   }
 
   async #readState() {
@@ -45,7 +57,7 @@ export class SessionStore {
 
   async #writeState(state) {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const tempPath = `${this.filePath}.${process.pid}.tmp`;
+    const tempPath = `${this.filePath}.${process.pid}.${this.nextWriteId++}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await rename(tempPath, this.filePath);
   }

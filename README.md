@@ -15,6 +15,7 @@ Telegram Codex Bridge is a small Node.js service that lets an allowlisted Telegr
 - List recent Codex sessions with `/sessions`.
 - Send outbound Telegram notifications from scripts or automations.
 - Run Codex through `codex exec` for predictable CLI-compatible behavior.
+- Run multiple Codex jobs concurrently across different sessions while serializing turns for the same session.
 - Optionally make Codex app session metadata visible in the desktop app session list without forcing the app to switch tabs.
 
 ## Requirements
@@ -49,6 +50,7 @@ Create `~/.config/telegram-codex-bridge/config.json`:
   "skipGitRepoCheck": true,
   "sandboxMode": "danger-full-access",
   "approvalPolicy": "never",
+  "browserUseMode": "auto",
   "stateFile": "~/.local/state/telegram-codex-bridge/state.json",
   "recentSessionLimit": 10,
   "pollTimeoutSeconds": 25
@@ -78,6 +80,7 @@ Environment variables override the config file:
 - `CODEX_SKIP_GIT_REPO_CHECK`
 - `CODEX_SANDBOX_MODE`
 - `CODEX_APPROVAL_POLICY`
+- `BRIDGE_BROWSER_USE_MODE` (`auto`, `always`, or `never`)
 - `TELEGRAM_POLL_TIMEOUT`
 - `BRIDGE_SESSION_LIMIT`
 
@@ -89,7 +92,9 @@ npm start
 
 The bridge uses Telegram long polling. Do not run two long-polling consumers with the same bot token at the same time; Telegram updates may be delivered to only one of them.
 
-The bridge runs Codex through the normal `codex exec` backend. It does not start or probe a Codex app-server process. When the macOS Codex app bundle is installed at `/Applications/Codex.app`, the bridge also passes the app-bundled `node_repl` runtime to `codex exec` so Browser Use/Chrome extension automation can be bootstrapped from Codex skills.
+The bridge runs Codex through the normal `codex exec` backend. It does not start or probe a Codex app-server process. When the macOS Codex app bundle is installed at `/Applications/Codex.app`, the bridge can pass the app-bundled `node_repl` runtime to `codex exec` so Browser Use/Chrome extension automation can be bootstrapped from Codex skills. `browserUseMode` controls when that runtime is injected: `auto` injects it only for browser-looking prompts, `always` preserves the old eager behavior, and `never` disables it.
+
+Codex prompts are scheduled as background jobs, so the bridge can continue accepting Telegram commands while a prompt is still running. Jobs for different Codex sessions may run at the same time. Multiple turns targeting the same session are queued and executed in order to avoid corrupting session state.
 
 ## Telegram Commands
 
@@ -99,7 +104,7 @@ The bridge runs Codex through the normal `codex exec` backend. It does not start
 - `/sessions` lists recent Codex sessions from `session_index.jsonl`.
 - `/attach <session-id-or-title>` attaches this chat to an existing session.
 - `/forget` detaches this chat from the active Codex session.
-- `/status` shows bridge state.
+- `/status` shows bridge state and queued/running jobs.
 - `/help` shows command help.
 - Plain text resumes the active session when attached; otherwise it starts a new session.
 
@@ -161,6 +166,7 @@ Telegram Codex Bridge는 Telegram에서 Codex CLI 세션을 시작하고 이어�
 - `/sessions`로 최근 Codex 세션 목록 확인.
 - 스크립트나 자동화에서 Telegram 알림 발송.
 - 예측 가능한 CLI 호환 동작을 위해 `codex exec`로 Codex 실행.
+- 서로 다른 Codex 세션의 작업은 동시에 실행하고, 같은 세션의 turn은 순서대로 실행.
 - Codex desktop 앱 세션 리스트에 bridge-created 세션이 보이도록 metadata 보정.
 
 ## 요구사항
@@ -195,6 +201,7 @@ npm test
   "skipGitRepoCheck": true,
   "sandboxMode": "danger-full-access",
   "approvalPolicy": "never",
+  "browserUseMode": "auto",
   "stateFile": "~/.local/state/telegram-codex-bridge/state.json",
   "recentSessionLimit": 10,
   "pollTimeoutSeconds": 25
@@ -224,6 +231,7 @@ chmod 600 ~/.config/telegram-codex-bridge/telegram-bot-token
 - `CODEX_SKIP_GIT_REPO_CHECK`
 - `CODEX_SANDBOX_MODE`
 - `CODEX_APPROVAL_POLICY`
+- `BRIDGE_BROWSER_USE_MODE` (`auto`, `always`, `never`)
 - `TELEGRAM_POLL_TIMEOUT`
 - `BRIDGE_SESSION_LIMIT`
 
@@ -235,7 +243,9 @@ npm start
 
 같은 bot token으로 long polling consumer를 두 개 이상 동시에 실행하지 마세요. Telegram update가 한쪽으로만 전달될 수 있습니다.
 
-bridge는 일반 `codex exec` backend로 Codex를 실행합니다. Codex app-server 프로세스를 시작하거나 probe하지 않습니다. macOS Codex 앱 번들이 `/Applications/Codex.app`에 설치되어 있으면, bridge가 앱에 포함된 `node_repl` runtime을 `codex exec`에 넘겨 Browser Use/Chrome 확장 자동화를 Codex skill에서 bootstrap할 수 있게 합니다.
+bridge는 일반 `codex exec` backend로 Codex를 실행합니다. Codex app-server 프로세스를 시작하거나 probe하지 않습니다. macOS Codex 앱 번들이 `/Applications/Codex.app`에 설치되어 있으면, bridge는 앱에 포함된 `node_repl` runtime을 `codex exec`에 넘겨 Browser Use/Chrome 확장 자동화를 Codex skill에서 bootstrap할 수 있습니다. `browserUseMode`가 이 주입 시점을 제어합니다. `auto`는 브라우저가 필요해 보이는 prompt에만 주입하고, `always`는 기존 eager 동작을 유지하며, `never`는 비활성화합니다.
+
+Codex prompt는 background job으로 예약되므로, 하나의 prompt가 실행 중이어도 bridge는 Telegram 명령을 계속 받을 수 있습니다. 서로 다른 Codex 세션의 job은 동시에 실행될 수 있습니다. 같은 세션을 대상으로 하는 여러 turn은 session state가 꼬이지 않도록 순서대로 queue에서 실행됩니다.
 
 ## Telegram 명령어
 
@@ -245,7 +255,7 @@ bridge는 일반 `codex exec` backend로 Codex를 실행합니다. Codex app-ser
 - `/sessions`: `session_index.jsonl`에서 최근 세션 목록을 보여줍니다.
 - `/attach <세션ID 또는 제목>`: 기존 세션에 이 채팅을 연결합니다.
 - `/forget`: 현재 세션 연결을 해제합니다.
-- `/status`: bridge 상태를 보여줍니다.
+- `/status`: bridge 상태와 queued/running job을 보여줍니다.
 - `/help`: 도움말을 보여줍니다.
 - 일반 메시지: 연결된 세션이 있으면 이어가고, 없으면 새 세션을 시작합니다.
 

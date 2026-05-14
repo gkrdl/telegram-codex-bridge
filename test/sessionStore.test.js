@@ -43,3 +43,21 @@ test('forgets active session without removing other chats', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('serializes concurrent updates to avoid losing chat state', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'telegram-codex-store-'));
+  try {
+    const file = join(dir, 'state.json');
+    const store = new SessionStore(file);
+
+    await Promise.all([
+      store.setActiveSession('1', { sessionId: 'a', cwd: '/a', title: 'A' }),
+      store.setActiveSession('2', { sessionId: 'b', cwd: '/b', title: 'B' }),
+    ]);
+
+    assert.equal((await store.getChatState('1')).activeSessionId, 'a');
+    assert.equal((await store.getChatState('2')).activeSessionId, 'b');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

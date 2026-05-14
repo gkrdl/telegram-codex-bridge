@@ -7,6 +7,7 @@ import { createCodexBackend } from './codexBackend.js';
 import { CodexRunner } from './codexRunner.js';
 import { findSession, readRecentSessions, upsertSessionIndex } from './codexSessions.js';
 import { markThreadInteractive } from './codexStateDb.js';
+import { SessionJobQueue } from './jobQueue.js';
 import { routeMessage, helpText } from './router.js';
 import { SessionStore } from './sessionStore.js';
 import { TelegramClient, getChatId, getMessageText, getSenderId } from './telegram.js';
@@ -30,6 +31,7 @@ async function main() {
     browserUseRuntime,
   });
   const codex = await createCodexBackend({ execRunner });
+  const jobQueue = new SessionJobQueue();
 
   console.log(`telegram-codex-bridge started with config ${config.configPath}`);
   let offset;
@@ -38,7 +40,7 @@ async function main() {
       const updates = await telegram.getUpdates({ offset, timeoutSeconds: config.pollTimeoutSeconds });
       for (const update of updates) {
         offset = update.update_id + 1;
-        await handleUpdate({ update, telegram, store, codex, config });
+        await handleUpdate({ update, telegram, store, codex, config, jobQueue });
       }
     } catch (error) {
       console.error(`[bridge] ${error.stack || error.message}`);
@@ -47,7 +49,7 @@ async function main() {
   }
 }
 
-async function handleUpdate({ update, telegram, store, codex, config }) {
+async function handleUpdate({ update, telegram, store, codex, config, jobQueue }) {
   const senderId = getSenderId(update);
   const chatId = getChatId(update);
   const text = getMessageText(update);
@@ -62,14 +64,15 @@ async function handleUpdate({ update, telegram, store, codex, config }) {
   try {
     const chatState = await store.getChatState(chatId);
     const decision = routeMessage(text, chatState);
-    await executeDecision({ decision, chatId, telegram, store, codex, config });
+    await executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue });
   } catch (error) {
     console.error(`[chat ${chatId}] ${error.stack || error.message}`);
     await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
   }
 }
 
-async function executeDecision({ decision, chatId, telegram, store, codex, config }) {
+async function executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue }) {
+  const browserUseEnabled = shouldEnableBrowserUse(decision, config);
   switch (decision.action) {
     case 'reply':
       await telegram.sendMessage(chatId, decision.text);
@@ -78,7 +81,7 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
       await telegram.sendMessage(chatId, helpText());
       return;
     case 'status':
-      await telegram.sendMessage(chatId, await statusText({ store, chatId, config }));
+      await telegram.sendMessage(chatId, await statusText({ store, chatId, config, jobQueue }));
       return;
     case 'sessions':
       await telegram.sendMessage(chatId, await sessionsText(config));
@@ -102,71 +105,103 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
       return;
     }
     case 'once': {
-      const result = await runCodexWithProgress({
+      await scheduleCodexJob({
+        jobQueue,
         telegram,
         chatId,
         label: 'Running one-off Codex task',
-        run: (onProgress) => codex.runOnce(decision.prompt, { onProgress }),
+        run: async () => {
+          const result = await runCodexWithProgress({
+            telegram,
+            chatId,
+            label: 'Running one-off Codex task',
+            run: (onProgress) => codex.runOnce(decision.prompt, { onProgress, browserUseEnabled }),
+          });
+          await sendFinalAnswer(telegram, chatId, result.finalMessage);
+        },
       });
-      await sendFinalAnswer(telegram, chatId, result.finalMessage);
       return;
     }
     case 'new': {
-      let indexedSessionId = '';
       const title = titleFromPrompt(decision.prompt);
-      const result = await runCodexWithProgress({
+      await scheduleCodexJob({
+        jobQueue,
         telegram,
         chatId,
         label: 'Starting new Codex session',
-        onEvent: (event) => {
-          const sessionId = event?.type === 'thread.started' ? event.thread_id : '';
-          if (!sessionId || indexedSessionId === sessionId) {
-            return;
+        run: async () => {
+          let indexedSessionId = '';
+          const result = await runCodexWithProgress({
+            telegram,
+            chatId,
+            label: 'Starting new Codex session',
+            onEvent: (event) => {
+              const sessionId = event?.type === 'thread.started' ? event.thread_id : '';
+              if (!sessionId || indexedSessionId === sessionId) {
+                return;
+              }
+              indexedSessionId = sessionId;
+              void upsertSessionIndex(config.codexHome, {
+                id: sessionId,
+                title,
+                updatedAt: new Date().toISOString(),
+              }).catch((error) => {
+                console.error(`[session index ${chatId}] ${error.stack || error.message}`);
+              });
+              void markThreadInteractive(config.codexHome, sessionId).catch((error) => {
+                console.error(`[session metadata ${chatId}] ${error.stack || error.message}`);
+              });
+              void store.setActiveSession(chatId, {
+                sessionId,
+                cwd: config.defaultCwd,
+                title,
+              }).catch((error) => {
+                console.error(`[session store ${chatId}] ${error.stack || error.message}`);
+              });
+            },
+            run: (onProgress) => codex.runNew(decision.prompt, { onProgress, browserUseEnabled }),
+          });
+          const sessionId = result.sessionId || indexedSessionId;
+          if (sessionId) {
+            await upsertSessionIndex(config.codexHome, {
+              id: sessionId,
+              title,
+              updatedAt: new Date().toISOString(),
+            });
+            await markThreadInteractive(config.codexHome, sessionId);
           }
-          indexedSessionId = sessionId;
-          void upsertSessionIndex(config.codexHome, {
-            id: sessionId,
-            title,
-            updatedAt: new Date().toISOString(),
-          }).catch((error) => {
-            console.error(`[session index ${chatId}] ${error.stack || error.message}`);
-          });
-          void markThreadInteractive(config.codexHome, sessionId).catch((error) => {
-            console.error(`[session metadata ${chatId}] ${error.stack || error.message}`);
-          });
+          const session = sessionId
+            ? await findSession(config.codexHome, sessionId)
+            : (await readRecentSessions(config.codexHome, 1))[0];
+          if (session) {
+            await store.setActiveSession(chatId, {
+              sessionId: session.id,
+              cwd: config.defaultCwd,
+              title: session.title,
+            });
+          }
+          await sendFinalAnswer(telegram, chatId, formatResult(result.finalMessage, session));
         },
-        run: (onProgress) => codex.runNew(decision.prompt, { onProgress }),
       });
-      const sessionId = result.sessionId || indexedSessionId;
-      if (sessionId) {
-        await upsertSessionIndex(config.codexHome, {
-          id: sessionId,
-          title,
-          updatedAt: new Date().toISOString(),
-        });
-        await markThreadInteractive(config.codexHome, sessionId);
-      }
-      const session = sessionId
-        ? await findSession(config.codexHome, sessionId)
-        : (await readRecentSessions(config.codexHome, 1))[0];
-      if (session) {
-        await store.setActiveSession(chatId, {
-          sessionId: session.id,
-          cwd: config.defaultCwd,
-          title: session.title,
-        });
-      }
-      await sendFinalAnswer(telegram, chatId, formatResult(result.finalMessage, session));
       return;
     }
     case 'resume': {
-      const result = await runCodexWithProgress({
+      await scheduleCodexJob({
+        jobQueue,
         telegram,
         chatId,
+        sessionKey: decision.sessionId,
         label: `Continuing Codex session ${decision.sessionId}`,
-        run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress }),
+        run: async () => {
+          const result = await runCodexWithProgress({
+            telegram,
+            chatId,
+            label: `Continuing Codex session ${decision.sessionId}`,
+            run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress, browserUseEnabled }),
+          });
+          await sendFinalAnswer(telegram, chatId, result.finalMessage);
+        },
       });
-      await sendFinalAnswer(telegram, chatId, result.finalMessage);
       return;
     }
     default:
@@ -174,15 +209,81 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
   }
 }
 
-async function statusText({ store, chatId, config }) {
+async function scheduleCodexJob({ jobQueue, telegram, chatId, sessionKey = '', label, run }) {
+  const { id, promise } = jobQueue.enqueue({ sessionKey, label, run });
+  await telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`);
+  promise.catch(async (error) => {
+    try {
+      await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
+    } catch (telegramError) {
+      console.error(`[job error notify ${chatId}] ${telegramError.stack || telegramError.message}`);
+    }
+  });
+  return id;
+}
+
+function shouldEnableBrowserUse(decision, config) {
+  if (config.browserUseMode === 'always') {
+    return true;
+  }
+  if (config.browserUseMode === 'never') {
+    return false;
+  }
+  if (!['new', 'resume', 'once'].includes(decision.action)) {
+    return false;
+  }
+  return promptNeedsBrowserUse(decision.prompt);
+}
+
+function promptNeedsBrowserUse(prompt) {
+  const text = String(prompt || '').toLowerCase();
+  const patterns = [
+    /https?:\/\//,
+    /\blocalhost\b/,
+    /\b127\.0\.0\.1\b/,
+    /\b0\.0\.0\.0\b/,
+    /\bchrome\b/,
+    /\bbrowser\b/,
+    /\bwebsite\b/,
+    /\bweb\s?page\b/,
+    /\bscreenshot\b/,
+    /\bplaywright\b/,
+    /\bdom\b/,
+    /\bcaptcha\b/,
+    /\blog\s?in\b/,
+    /\bsign\s?in\b/,
+    /브라우저/,
+    /크롬/,
+    /웹사이트/,
+    /웹\s?페이지/,
+    /사이트/,
+    /스크린샷/,
+    /로그인/,
+    /캡차/,
+    /열어/,
+    /접속/,
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+async function statusText({ store, chatId, config, jobQueue }) {
   const chatState = await store.getChatState(chatId);
+  const activeJobs = jobQueue
+    ? jobQueue.snapshot().filter((job) => ['queued', 'running'].includes(job.status))
+    : [];
   return [
     'Telegram Codex Bridge',
     `Codex home: ${config.codexHome}`,
     `Default cwd: ${config.defaultCwd}`,
     `Active session: ${chatState.activeSessionId || '(none)'}`,
     chatState.activeTitle ? `Title: ${chatState.activeTitle}` : '',
+    activeJobs.length ? `Jobs:\n${activeJobs.map(formatJobStatus).join('\n')}` : 'Jobs: none',
   ].filter(Boolean).join('\n');
+}
+
+function formatJobStatus(job) {
+  const session = job.sessionKey ? ` session=${job.sessionKey}` : '';
+  return `#${job.id} ${job.status}${session} ${job.label}`;
 }
 
 async function sessionsText(config) {

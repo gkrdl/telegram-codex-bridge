@@ -26,6 +26,7 @@ export async function loadConfig() {
     skipGitRepoCheck: parseBoolean(process.env.CODEX_SKIP_GIT_REPO_CHECK, fileConfig.skipGitRepoCheck ?? false),
     sandboxMode: process.env.CODEX_SANDBOX_MODE || fileConfig.sandboxMode || '',
     approvalPolicy: process.env.CODEX_APPROVAL_POLICY || fileConfig.approvalPolicy || '',
+    browserUseMode: normalizeBrowserUseMode(process.env.BRIDGE_BROWSER_USE_MODE || fileConfig.browserUseMode || 'auto'),
     pollTimeoutSeconds: Number(process.env.TELEGRAM_POLL_TIMEOUT || fileConfig.pollTimeoutSeconds || 25),
     recentSessionLimit: Number(process.env.BRIDGE_SESSION_LIMIT || fileConfig.recentSessionLimit || 10),
   };
@@ -79,4 +80,12 @@ function parseBoolean(envValue, defaultValue) {
     return Boolean(defaultValue);
   }
   return ['1', 'true', 'yes', 'on'].includes(String(envValue).toLowerCase());
+}
+
+function normalizeBrowserUseMode(value) {
+  const mode = String(value || 'auto').toLowerCase();
+  if (['auto', 'always', 'never'].includes(mode)) {
+    return mode;
+  }
+  throw new Error(`Invalid browserUseMode: ${value}. Expected auto, always, or never.`);
 }

@@ -28,7 +28,7 @@ export class CodexRunner {
 
   runNew(prompt, options = {}) {
     const args = ['exec', '--json'];
-    this.#addCommonArgs(args);
+    this.#addCommonArgs(args, options);
     if (this.model) {
       args.push('-m', this.model);
     }
@@ -38,7 +38,7 @@ export class CodexRunner {
 
   resume(sessionId, prompt, options = {}) {
     const args = ['exec', 'resume', sessionId, '--json'];
-    this.#addCommonArgs(args);
+    this.#addCommonArgs(args, options);
     if (this.model) {
       args.push('-m', this.model);
     }
@@ -48,7 +48,7 @@ export class CodexRunner {
 
   runOnce(prompt, options = {}) {
     const args = ['exec', '--json', '--ephemeral'];
-    this.#addCommonArgs(args);
+    this.#addCommonArgs(args, options);
     if (this.model) {
       args.push('-m', this.model);
     }
@@ -56,7 +56,7 @@ export class CodexRunner {
     return this.#run(args, prompt, options);
   }
 
-  #addCommonArgs(args) {
+  #addCommonArgs(args, options = {}) {
     if (this.skipGitRepoCheck) {
       args.push('--skip-git-repo-check');
     }
@@ -66,12 +66,15 @@ export class CodexRunner {
     if (this.approvalPolicy) {
       args.push('-c', `approval_policy="${this.approvalPolicy}"`);
     }
-    for (const [key, value] of this.#browserUseConfigOverrides()) {
+    for (const [key, value] of this.#browserUseConfigOverrides(options)) {
       args.push('-c', `${key}=${value}`);
     }
   }
 
-  #browserUseConfigOverrides() {
+  #browserUseConfigOverrides(options = {}) {
+    if (options.browserUseEnabled === false) {
+      return [];
+    }
     const runtime = this.browserUseRuntime;
     if (!runtime?.nodeReplPath || !runtime?.nodePath) {
       return [];
