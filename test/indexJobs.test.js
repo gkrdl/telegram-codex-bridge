@@ -123,6 +123,45 @@ test('progress updates include update time and assistant delta text', async () =
   assert.match(progress, /Updated: \d{2}:\d{2}:\d{2}/);
 });
 
+test('detaches a chat when its active Codex session no longer has a rollout', async () => {
+  const jobQueue = new SessionJobQueue();
+  const sent = [];
+  const forgotten = [];
+  const telegram = {
+    async sendMessage(chatId, text, options = {}) {
+      sent.push({ chatId, text, options });
+      return { message_id: sent.length };
+    },
+    async editMessageText() {},
+  };
+  const store = {
+    async forgetChat(chatId) {
+      forgotten.push(chatId);
+    },
+  };
+  const codex = {
+    async resume() {
+      throw new Error('thread/resume failed: no rollout found for thread id stale-thread (code -32600)');
+    },
+  };
+
+  await executeDecision({
+    decision: { action: 'resume', sessionId: 'stale-thread', prompt: 'keep going' },
+    chatId: '123',
+    replyToMessageId: 77,
+    telegram,
+    store,
+    codex,
+    config: { browserUseMode: 'never' },
+    jobQueue,
+  });
+  await waitFor(() => forgotten.length === 1);
+
+  assert.deepEqual(forgotten, ['123']);
+  assert.equal(sent.some((message) => message.text.includes('Active Codex session is no longer available')), true);
+  assert.equal(sent.some((message) => message.text.includes('Codex bridge error')), false);
+});
+
 async function waitFor(condition) {
   const deadline = Date.now() + 500;
   while (Date.now() < deadline) {

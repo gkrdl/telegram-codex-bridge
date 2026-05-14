@@ -202,15 +202,30 @@ export async function executeDecision({ decision, chatId, replyToMessageId = '',
         sessionKey: decision.sessionId,
         label: `Continuing Codex session ${decision.sessionId}`,
         run: async ({ progressMessage } = {}) => {
-          const result = await runCodexWithProgress({
-            telegram,
-            chatId,
-            replyToMessageId,
-            progressMessage,
-            label: `Continuing Codex session ${decision.sessionId}`,
-            run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress, browserUseEnabled }),
-          });
-          await sendFinalAnswer(telegram, chatId, result.finalMessage, replyToMessageId);
+          try {
+            const result = await runCodexWithProgress({
+              telegram,
+              chatId,
+              replyToMessageId,
+              progressMessage,
+              label: `Continuing Codex session ${decision.sessionId}`,
+              run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress, browserUseEnabled }),
+            });
+            await sendFinalAnswer(telegram, chatId, result.finalMessage, replyToMessageId);
+          } catch (error) {
+            if (!isMissingRolloutError(error)) {
+              throw error;
+            }
+            await store.forgetChat(chatId);
+            await telegram.sendMessage(
+              chatId,
+              [
+                'Active Codex session is no longer available, so I detached this chat from it.',
+                'Use /new <prompt> to start a new session, or /attach <session-id-or-title> to attach another one.',
+              ].join('\n'),
+              replyOptions(replyToMessageId),
+            );
+          }
         },
       });
       return;
@@ -491,6 +506,11 @@ function sleep(ms) {
 function cleanError(error) {
   const message = error?.message || String(error);
   return message.length <= 1500 ? message : `${message.slice(0, 1500)}\n...[truncated]`;
+}
+
+function isMissingRolloutError(error) {
+  const message = error?.message || String(error);
+  return message.includes('no rollout found for thread id');
 }
 
 function findCodexAppBrowserUseRuntime() {
