@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { loadConfig, assertConfig } from './config.js';
 import { createCodexBackend } from './codexBackend.js';
@@ -49,7 +50,7 @@ async function main() {
   }
 }
 
-async function handleUpdate({ update, telegram, store, codex, config, jobQueue }) {
+export async function handleUpdate({ update, telegram, store, codex, config, jobQueue }) {
   const senderId = getSenderId(update);
   const chatId = getChatId(update);
   const text = getMessageText(update);
@@ -71,7 +72,7 @@ async function handleUpdate({ update, telegram, store, codex, config, jobQueue }
   }
 }
 
-async function executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue }) {
+export async function executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue }) {
   const browserUseEnabled = shouldEnableBrowserUse(decision, config);
   switch (decision.action) {
     case 'reply':
@@ -209,9 +210,11 @@ async function executeDecision({ decision, chatId, telegram, store, codex, confi
   }
 }
 
-async function scheduleCodexJob({ jobQueue, telegram, chatId, sessionKey = '', label, run }) {
+function scheduleCodexJob({ jobQueue, telegram, chatId, sessionKey = '', label, run }) {
   const { id, promise } = jobQueue.enqueue({ sessionKey, label, run });
-  await telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`);
+  void telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`).catch((error) => {
+    console.error(`[job queued notify ${chatId}] ${error.stack || error.message}`);
+  });
   promise.catch(async (error) => {
     try {
       await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
@@ -423,7 +426,9 @@ function findCodexAppBrowserUseRuntime() {
     : undefined;
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.stack || error.message);
+    process.exitCode = 1;
+  });
+}
