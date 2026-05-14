@@ -88,6 +88,40 @@ test('sends Codex job notifications as replies to the source Telegram message', 
   assert.equal(sent[2].options.replyToMessageId, 77);
 });
 
+test('progress updates include update time and assistant delta text', async () => {
+  const jobQueue = new SessionJobQueue();
+  const edits = [];
+  const telegram = {
+    async sendMessage() {
+      return { message_id: 1 };
+    },
+    async editMessageText(chatId, messageId, text) {
+      edits.push(text);
+    },
+  };
+  const codex = {
+    async runOnce(prompt, { onProgress }) {
+      onProgress({ type: 'agent_message.delta', delta: '중간 결과를 작성 중입니다.' });
+      return { finalMessage: 'done' };
+    },
+  };
+
+  await executeDecision({
+    decision: { action: 'once', prompt: 'quick task' },
+    chatId: '123',
+    replyToMessageId: 77,
+    telegram,
+    store: {},
+    codex,
+    config: { browserUseMode: 'never' },
+    jobQueue,
+  });
+  await waitFor(() => edits.some((text) => text.includes('중간 결과를 작성 중입니다.')));
+
+  const progress = edits.find((text) => text.includes('중간 결과를 작성 중입니다.'));
+  assert.match(progress, /Updated: \d{2}:\d{2}:\d{2}/);
+});
+
 async function waitFor(condition) {
   const deadline = Date.now() + 500;
   while (Date.now() < deadline) {

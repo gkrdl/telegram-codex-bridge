@@ -356,15 +356,27 @@ async function runCodexWithProgress({ telegram, chatId, replyToMessageId = '', l
         return;
       }
       progressItems.push(item);
-      const recent = progressItems.slice(-5).map((line) => `- ${line}`).join('\n');
-      void editProgress(`${label}...\n${recent}`);
+      void editProgress(formatProgressText(label, progressItems));
     });
-    await editProgress(`${label}\nStatus: completed`, true);
+    await editProgress(formatProgressText(label, progressItems, 'completed'), true);
     return result;
   } catch (error) {
-    await editProgress(`${label}\nStatus: failed`, true);
+    await editProgress(formatProgressText(label, progressItems, 'failed'), true);
     throw error;
   }
+}
+
+function formatProgressText(label, progressItems, status = '') {
+  const lines = [`${label}...`, `Updated: ${timeText()}`];
+  if (status) {
+    lines.push(`Status: ${status}`);
+  }
+  const recent = progressItems.slice(-5).map((line) => `- ${line}`);
+  return [...lines, ...recent].join('\n');
+}
+
+function timeText(date = new Date()) {
+  return date.toLocaleTimeString('en-GB', { hour12: false });
 }
 
 function titleFromPrompt(prompt) {
@@ -381,6 +393,15 @@ function progressLine(event) {
   }
   if (event.type === 'thread.started') {
     return `thread ${event.thread_id || 'started'}`;
+  }
+  if (event.type === 'agent_message.delta') {
+    return progressSnippet(event.delta, 'assistant');
+  }
+  if (event.type === 'message' && event.role === 'assistant') {
+    return progressSnippet(event.content, 'assistant');
+  }
+  if (event.type === 'final_message') {
+    return progressSnippet(event.message ?? event.content ?? event.text, 'assistant');
   }
   if (event.type === 'turn.started') {
     return 'turn started';
@@ -402,12 +423,35 @@ function describeItem(item, fallback) {
     return fallback;
   }
   if (item.type === 'agent_message') {
-    return 'assistant response ready';
+    return progressSnippet(item.text ?? item.content, 'assistant') || 'assistant response ready';
   }
   if (item.type === 'tool_call') {
-    return `tool ${item.name || item.call_id || fallback}`;
+    return progressSnippet(item.output ?? item.result, `tool ${item.name || item.call_id || fallback}`)
+      || `tool ${item.name || item.call_id || fallback}`;
   }
   return `${item.type || 'item'} ${fallback}`;
+}
+
+function progressSnippet(value, prefix) {
+  const text = contentToText(value).replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+  const snippet = text.length <= 240 ? text : `${text.slice(0, 237)}...`;
+  return `${prefix}: ${snippet}`;
+}
+
+function contentToText(content) {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (typeof item === 'string') return item;
+      return item?.text ?? item?.content ?? '';
+    }).filter(Boolean).join(' ');
+  }
+  return '';
 }
 
 async function sendFinalAnswer(telegram, chatId, markdown, replyToMessageId = '') {
