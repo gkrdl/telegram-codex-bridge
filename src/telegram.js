@@ -1,7 +1,9 @@
 export class TelegramClient {
-  constructor({ token, fetchImpl = fetch }) {
+  constructor({ token, fetchImpl = fetch, requestTimeoutMs = 15000, pollTimeoutSlackMs = 10000 }) {
     this.token = token;
     this.fetch = fetchImpl;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.pollTimeoutSlackMs = pollTimeoutSlackMs;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
   }
 
@@ -12,7 +14,9 @@ export class TelegramClient {
     }
     url.searchParams.set('timeout', String(timeoutSeconds));
     url.searchParams.set('allowed_updates', JSON.stringify(['message']));
-    const response = await this.fetch(url);
+    const response = await this.fetch(url, {
+      signal: AbortSignal.timeout((timeoutSeconds * 1000) + this.pollTimeoutSlackMs),
+    });
     const body = await response.json();
     if (!body.ok) {
       throw new Error(`Telegram getUpdates failed: ${body.description || response.status}`);
@@ -24,6 +28,7 @@ export class TelegramClient {
     const response = await this.fetch(`${this.baseUrl}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
       body: JSON.stringify({
         chat_id: chatId,
         text: truncateTelegramText(text),
@@ -42,6 +47,7 @@ export class TelegramClient {
     const response = await this.fetch(`${this.baseUrl}/editMessageText`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
       body: JSON.stringify({
         chat_id: chatId,
         message_id: messageId,
