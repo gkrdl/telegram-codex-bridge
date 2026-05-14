@@ -113,11 +113,12 @@ export async function executeDecision({ decision, chatId, replyToMessageId = '',
         chatId,
         replyToMessageId,
         label: 'Running one-off Codex task',
-        run: async () => {
+        run: async ({ progressMessage } = {}) => {
           const result = await runCodexWithProgress({
             telegram,
             chatId,
             replyToMessageId,
+            progressMessage,
             label: 'Running one-off Codex task',
             run: (onProgress) => codex.runOnce(decision.prompt, { onProgress, browserUseEnabled }),
           });
@@ -134,12 +135,13 @@ export async function executeDecision({ decision, chatId, replyToMessageId = '',
         chatId,
         replyToMessageId,
         label: 'Starting new Codex session',
-        run: async () => {
+        run: async ({ progressMessage } = {}) => {
           let indexedSessionId = '';
           const result = await runCodexWithProgress({
             telegram,
             chatId,
             replyToMessageId,
+            progressMessage,
             label: 'Starting new Codex session',
             onEvent: (event) => {
               const sessionId = event?.type === 'thread.started' ? event.thread_id : '';
@@ -199,11 +201,12 @@ export async function executeDecision({ decision, chatId, replyToMessageId = '',
         replyToMessageId,
         sessionKey: decision.sessionId,
         label: `Continuing Codex session ${decision.sessionId}`,
-        run: async () => {
+        run: async ({ progressMessage } = {}) => {
           const result = await runCodexWithProgress({
             telegram,
             chatId,
             replyToMessageId,
+            progressMessage,
             label: `Continuing Codex session ${decision.sessionId}`,
             run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress, browserUseEnabled }),
           });
@@ -218,9 +221,22 @@ export async function executeDecision({ decision, chatId, replyToMessageId = '',
 }
 
 function scheduleCodexJob({ jobQueue, telegram, chatId, replyToMessageId = '', sessionKey = '', label, run }) {
-  const { id, promise } = jobQueue.enqueue({ sessionKey, label, run });
-  void telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`, replyOptions(replyToMessageId)).catch((error) => {
+  let progressMessagePromise;
+  const { id, promise } = jobQueue.enqueue({
+    sessionKey,
+    label,
+    run: async (context) => run({
+      ...context,
+      progressMessage: await progressMessagePromise,
+    }),
+  });
+  progressMessagePromise = telegram.sendMessage(
+    chatId,
+    formatProgressText(`${label} #${id}`, [], 'queued'),
+    replyOptions(replyToMessageId),
+  ).catch((error) => {
     console.error(`[job queued notify ${chatId}] ${error.stack || error.message}`);
+    return null;
   });
   promise.catch(async (error) => {
     try {
@@ -317,10 +333,10 @@ function formatResult(message, session) {
   return `${message}\n\nActive session: ${session.title}\n${session.id}`;
 }
 
-async function runCodexWithProgress({ telegram, chatId, replyToMessageId = '', label, run, onEvent }) {
-  const progressMessage = await telegram.sendMessage(
+async function runCodexWithProgress({ telegram, chatId, replyToMessageId = '', progressMessage, label, run, onEvent }) {
+  progressMessage ??= await telegram.sendMessage(
     chatId,
-    `${label}...\nStatus: queued`,
+    formatProgressText(label, [], 'queued'),
     replyOptions(replyToMessageId),
   );
   let lastEditAt = 0;
@@ -347,6 +363,7 @@ async function runCodexWithProgress({ telegram, chatId, replyToMessageId = '', l
   };
 
   try {
+    await editProgress(formatProgressText(label, progressItems, 'running'), true);
     const result = await run((event) => {
       if (onEvent) {
         onEvent(event);

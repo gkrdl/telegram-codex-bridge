@@ -49,7 +49,7 @@ test('returns immediately after scheduling a Codex job even when Telegram ack is
   await decisionPromise;
 });
 
-test('sends Codex job notifications as replies to the source Telegram message', async () => {
+test('sends one progress message and the final answer as replies to the source Telegram message', async () => {
   const jobQueue = new SessionJobQueue();
   const sent = [];
   const telegram = {
@@ -81,11 +81,12 @@ test('sends Codex job notifications as replies to the source Telegram message', 
     config: { browserUseMode: 'never' },
     jobQueue,
   });
-  await waitFor(() => sent.length >= 3);
+  await waitFor(() => sent.length >= 2);
 
   assert.equal(sent[0].options.replyToMessageId, 77);
+  assert.match(sent[0].text, /Status: queued/);
   assert.equal(sent[1].options.replyToMessageId, 77);
-  assert.equal(sent[2].options.replyToMessageId, 77);
+  assert.equal(sent.length, 2);
 });
 
 test('progress updates include update time and assistant delta text', async () => {
