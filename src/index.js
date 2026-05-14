@@ -11,7 +11,7 @@ import { markThreadInteractive } from './codexStateDb.js';
 import { SessionJobQueue } from './jobQueue.js';
 import { routeMessage, helpText } from './router.js';
 import { SessionStore } from './sessionStore.js';
-import { TelegramClient, getChatId, getMessageText, getSenderId } from './telegram.js';
+import { TelegramClient, getChatId, getMessageId, getMessageText, getSenderId } from './telegram.js';
 import { markdownToTelegramHtml } from './telegramFormat.js';
 
 async function main() {
@@ -53,48 +53,49 @@ async function main() {
 export async function handleUpdate({ update, telegram, store, codex, config, jobQueue }) {
   const senderId = getSenderId(update);
   const chatId = getChatId(update);
+  const replyToMessageId = getMessageId(update);
   const text = getMessageText(update);
   if (!chatId || !text) {
     return;
   }
   if (!config.allowedUsers.includes(senderId)) {
-    await telegram.sendMessage(chatId, 'This Telegram user is not allowed to use this bridge.');
+    await telegram.sendMessage(chatId, 'This Telegram user is not allowed to use this bridge.', replyOptions(replyToMessageId));
     return;
   }
 
   try {
     const chatState = await store.getChatState(chatId);
     const decision = routeMessage(text, chatState);
-    await executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue });
+    await executeDecision({ decision, chatId, replyToMessageId, telegram, store, codex, config, jobQueue });
   } catch (error) {
     console.error(`[chat ${chatId}] ${error.stack || error.message}`);
-    await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
+    await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`, replyOptions(replyToMessageId));
   }
 }
 
-export async function executeDecision({ decision, chatId, telegram, store, codex, config, jobQueue }) {
+export async function executeDecision({ decision, chatId, replyToMessageId = '', telegram, store, codex, config, jobQueue }) {
   const browserUseEnabled = shouldEnableBrowserUse(decision, config);
   switch (decision.action) {
     case 'reply':
-      await telegram.sendMessage(chatId, decision.text);
+      await telegram.sendMessage(chatId, decision.text, replyOptions(replyToMessageId));
       return;
     case 'help':
-      await telegram.sendMessage(chatId, helpText());
+      await telegram.sendMessage(chatId, helpText(), replyOptions(replyToMessageId));
       return;
     case 'status':
-      await telegram.sendMessage(chatId, await statusText({ store, chatId, config, jobQueue }));
+      await telegram.sendMessage(chatId, await statusText({ store, chatId, config, jobQueue }), replyOptions(replyToMessageId));
       return;
     case 'sessions':
-      await telegram.sendMessage(chatId, await sessionsText(config));
+      await telegram.sendMessage(chatId, await sessionsText(config), replyOptions(replyToMessageId));
       return;
     case 'forget':
       await store.forgetChat(chatId);
-      await telegram.sendMessage(chatId, 'Detached this chat from the active Codex session.');
+      await telegram.sendMessage(chatId, 'Detached this chat from the active Codex session.', replyOptions(replyToMessageId));
       return;
     case 'attach': {
       const session = await findSession(config.codexHome, decision.sessionId);
       if (!session) {
-        await telegram.sendMessage(chatId, `Could not find Codex session matching: ${decision.sessionId}`);
+        await telegram.sendMessage(chatId, `Could not find Codex session matching: ${decision.sessionId}`, replyOptions(replyToMessageId));
         return;
       }
       await store.setActiveSession(chatId, {
@@ -102,7 +103,7 @@ export async function executeDecision({ decision, chatId, telegram, store, codex
         cwd: config.defaultCwd,
         title: session.title,
       });
-      await telegram.sendMessage(chatId, `Attached to ${session.title}\n${session.id}`);
+      await telegram.sendMessage(chatId, `Attached to ${session.title}\n${session.id}`, replyOptions(replyToMessageId));
       return;
     }
     case 'once': {
@@ -110,15 +111,17 @@ export async function executeDecision({ decision, chatId, telegram, store, codex
         jobQueue,
         telegram,
         chatId,
+        replyToMessageId,
         label: 'Running one-off Codex task',
         run: async () => {
           const result = await runCodexWithProgress({
             telegram,
             chatId,
+            replyToMessageId,
             label: 'Running one-off Codex task',
             run: (onProgress) => codex.runOnce(decision.prompt, { onProgress, browserUseEnabled }),
           });
-          await sendFinalAnswer(telegram, chatId, result.finalMessage);
+          await sendFinalAnswer(telegram, chatId, result.finalMessage, replyToMessageId);
         },
       });
       return;
@@ -129,12 +132,14 @@ export async function executeDecision({ decision, chatId, telegram, store, codex
         jobQueue,
         telegram,
         chatId,
+        replyToMessageId,
         label: 'Starting new Codex session',
         run: async () => {
           let indexedSessionId = '';
           const result = await runCodexWithProgress({
             telegram,
             chatId,
+            replyToMessageId,
             label: 'Starting new Codex session',
             onEvent: (event) => {
               const sessionId = event?.type === 'thread.started' ? event.thread_id : '';
@@ -181,7 +186,7 @@ export async function executeDecision({ decision, chatId, telegram, store, codex
               title: session.title,
             });
           }
-          await sendFinalAnswer(telegram, chatId, formatResult(result.finalMessage, session));
+          await sendFinalAnswer(telegram, chatId, formatResult(result.finalMessage, session), replyToMessageId);
         },
       });
       return;
@@ -191,38 +196,44 @@ export async function executeDecision({ decision, chatId, telegram, store, codex
         jobQueue,
         telegram,
         chatId,
+        replyToMessageId,
         sessionKey: decision.sessionId,
         label: `Continuing Codex session ${decision.sessionId}`,
         run: async () => {
           const result = await runCodexWithProgress({
             telegram,
             chatId,
+            replyToMessageId,
             label: `Continuing Codex session ${decision.sessionId}`,
             run: (onProgress) => codex.resume(decision.sessionId, decision.prompt, { onProgress, browserUseEnabled }),
           });
-          await sendFinalAnswer(telegram, chatId, result.finalMessage);
+          await sendFinalAnswer(telegram, chatId, result.finalMessage, replyToMessageId);
         },
       });
       return;
     }
     default:
-      await telegram.sendMessage(chatId, `Unknown bridge action: ${decision.action}`);
+      await telegram.sendMessage(chatId, `Unknown bridge action: ${decision.action}`, replyOptions(replyToMessageId));
   }
 }
 
-function scheduleCodexJob({ jobQueue, telegram, chatId, sessionKey = '', label, run }) {
+function scheduleCodexJob({ jobQueue, telegram, chatId, replyToMessageId = '', sessionKey = '', label, run }) {
   const { id, promise } = jobQueue.enqueue({ sessionKey, label, run });
-  void telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`).catch((error) => {
+  void telegram.sendMessage(chatId, `Queued Codex job #${id}\n${label}`, replyOptions(replyToMessageId)).catch((error) => {
     console.error(`[job queued notify ${chatId}] ${error.stack || error.message}`);
   });
   promise.catch(async (error) => {
     try {
-      await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`);
+      await telegram.sendMessage(chatId, `Codex bridge error:\n${cleanError(error)}`, replyOptions(replyToMessageId));
     } catch (telegramError) {
       console.error(`[job error notify ${chatId}] ${telegramError.stack || telegramError.message}`);
     }
   });
   return id;
+}
+
+function replyOptions(replyToMessageId, options = {}) {
+  return replyToMessageId ? { ...options, replyToMessageId } : options;
 }
 
 function shouldEnableBrowserUse(decision, config) {
@@ -306,8 +317,12 @@ function formatResult(message, session) {
   return `${message}\n\nActive session: ${session.title}\n${session.id}`;
 }
 
-async function runCodexWithProgress({ telegram, chatId, label, run, onEvent }) {
-  const progressMessage = await telegram.sendMessage(chatId, `${label}...\nStatus: queued`);
+async function runCodexWithProgress({ telegram, chatId, replyToMessageId = '', label, run, onEvent }) {
+  const progressMessage = await telegram.sendMessage(
+    chatId,
+    `${label}...\nStatus: queued`,
+    replyOptions(replyToMessageId),
+  );
   let lastEditAt = 0;
   let lastText = '';
   const progressItems = [];
@@ -395,12 +410,16 @@ function describeItem(item, fallback) {
   return `${item.type || 'item'} ${fallback}`;
 }
 
-async function sendFinalAnswer(telegram, chatId, markdown) {
+async function sendFinalAnswer(telegram, chatId, markdown, replyToMessageId = '') {
   try {
-    await telegram.sendMessage(chatId, markdownToTelegramHtml(markdown), { parseMode: 'HTML' });
+    await telegram.sendMessage(
+      chatId,
+      markdownToTelegramHtml(markdown),
+      replyOptions(replyToMessageId, { parseMode: 'HTML' }),
+    );
   } catch (error) {
     console.error(`[telegram html fallback ${chatId}] ${error.stack || error.message}`);
-    await telegram.sendMessage(chatId, markdown);
+    await telegram.sendMessage(chatId, markdown, replyOptions(replyToMessageId));
   }
 }
 

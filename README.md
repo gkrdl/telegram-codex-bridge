@@ -96,6 +96,8 @@ The bridge runs Codex through the normal `codex exec` backend. It does not start
 
 Codex prompts are scheduled as background jobs, so the bridge can continue accepting Telegram commands while a prompt is still running. Jobs for different Codex sessions may run at the same time. Multiple turns targeting the same session are queued and executed in order to avoid corrupting session state.
 
+Bridge responses are sent as replies to the original Telegram message, which makes concurrent job output easier to match to the prompt that started it.
+
 ## Telegram Commands
 
 - `/new <prompt>` starts a new persistent Codex session and attaches this chat to it.
@@ -246,6 +248,8 @@ npm start
 bridge는 일반 `codex exec` backend로 Codex를 실행합니다. Codex app-server 프로세스를 시작하거나 probe하지 않습니다. macOS Codex 앱 번들이 `/Applications/Codex.app`에 설치되어 있으면, bridge는 앱에 포함된 `node_repl` runtime을 `codex exec`에 넘겨 Browser Use/Chrome 확장 자동화를 Codex skill에서 bootstrap할 수 있습니다. `browserUseMode`가 이 주입 시점을 제어합니다. `auto`는 브라우저가 필요해 보이는 prompt에만 주입하고, `always`는 기존 eager 동작을 유지하며, `never`는 비활성화합니다.
 
 Codex prompt는 background job으로 예약되므로, 하나의 prompt가 실행 중이어도 bridge는 Telegram 명령을 계속 받을 수 있습니다. 서로 다른 Codex 세션의 job은 동시에 실행될 수 있습니다. 같은 세션을 대상으로 하는 여러 turn은 session state가 꼬이지 않도록 순서대로 queue에서 실행됩니다.
+
+bridge 응답은 원본 Telegram 메시지의 reply로 전송됩니다. 여러 job이 동시에 실행될 때도 어떤 prompt에 대한 출력인지 구분하기 쉽습니다.
 
 ## Telegram 명령어
 

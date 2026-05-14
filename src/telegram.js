@@ -33,6 +33,7 @@ export class TelegramClient {
         chat_id: chatId,
         text: truncateTelegramText(text),
         ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
+        ...(options.replyToMessageId ? { reply_to_message_id: options.replyToMessageId } : {}),
         disable_web_page_preview: true,
       }),
     });
@@ -66,6 +67,10 @@ export class TelegramClient {
 
 export function getMessageText(update) {
   return update?.message?.text || update?.message?.caption || '';
+}
+
+export function getMessageId(update) {
+  return update?.message?.message_id || '';
 }
 
 export function getSenderId(update) {

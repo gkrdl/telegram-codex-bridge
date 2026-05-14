@@ -35,6 +35,22 @@ test('adds an abort signal to send requests', async () => {
   assert.ok(capturedSignal instanceof AbortSignal);
 });
 
+test('includes reply target when sending a reply message', async () => {
+  let payload;
+  const client = new TelegramClient({
+    token: 'token',
+    fetchImpl: async (url, options = {}) => {
+      payload = JSON.parse(options.body);
+      assert.match(String(url), /sendMessage/);
+      return okResponse({ result: { message_id: 1 } });
+    },
+  });
+
+  await client.sendMessage('123', 'hello', { replyToMessageId: 77 });
+
+  assert.equal(payload.reply_to_message_id, 77);
+});
+
 function okResponse(body) {
   return {
     status: 200,
